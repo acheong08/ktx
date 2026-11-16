@@ -141,7 +141,7 @@ How it's checked:
 ### Editing templates
 
 ```sh
-go tool templ generate ./internal/web   # after changing views.templ; commit the generated views_templ.go
+go tool templ generate -path internal/web   # after changing views.templ; commit the generated views_templ.go
 ```
 
 ## Configuration

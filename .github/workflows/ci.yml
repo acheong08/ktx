@@ -23,7 +23,7 @@ jobs:
 
       - name: Generated templ code is up to date
         run: |
-          go tool templ generate ./internal/web
+          go tool templ generate -path internal/web
           git diff --exit-code
 
       - name: Vet and test
