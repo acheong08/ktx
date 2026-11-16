@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -164,7 +165,7 @@ func (e *env) login(t *testing.T) {
 		t.Fatalf("no challenge in login page:\n%s", page)
 	}
 	c := m[1]
-	if !strings.Contains(page, "printf &#39;%s&#39; &#39;"+c+"&#39; | ssh-keygen -Y sign -n brain-server") {
+	if !strings.Contains(page, "printf &#39;%s&#39; &#39;"+c+"&#39; &gt; ~/.brain-login &amp;&amp; ssh-keygen -Y sign -n brain-server") {
 		t.Errorf("command missing from login page")
 	}
 	code, body, _ := e.do(t, "POST", "/login", url.Values{"challenge": {c}, "signature": {signWith(t, e.key, Namespace, c)}})
@@ -188,16 +189,62 @@ func put(t *testing.T, st *store.Store, src string) string {
 func TestLoginCommandFollowsOS(t *testing.T) {
 	e := setup(t)
 	for ua, want := range map[string]string{
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15":      "| pbcopy</pre>",
-		"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0": "| wl-copy</pre>",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64)":                              "-f ~/.ssh/id_ed25519</pre>",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15":      "pbcopy &lt; ~/.brain-login.sig;",
+		"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0": "wl-copy &lt; ~/.brain-login.sig;",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64)":                              "cat ~/.brain-login.sig;",
 	} {
 		_, page, _ := e.do(t, "GET", "/login", nil, "User-Agent", ua)
-		if !strings.Contains(page, want) {
-			t.Errorf("%s: command should end with %q", ua, want)
+		cmd := regexp.MustCompile(`<pre id="login-cmd">([^<]*)</pre>`).FindStringSubmatch(page)
+		if cmd == nil || !strings.Contains(cmd[1], want) || !strings.Contains(cmd[1], "-f ~/.ssh/id_ed25519 ~/.brain-login") {
+			t.Errorf("%s: command %q should contain %q", ua, cmd, want)
 		}
-		if !strings.Contains(page, `data-template="printf &#39;%s&#39; &#39;brain-login:`) || !strings.Contains(page, "xclip -selection clipboard") {
+		if !strings.Contains(page, "xclip -selection clipboard &lt; ~/.brain-login.sig") {
 			t.Errorf("%s: variants missing", ua)
+		}
+	}
+}
+
+// TestLoginCommandRuns runs the "print" command the page shows, in a real
+// shell, and logs in with what it prints.
+func TestLoginCommandRuns(t *testing.T) {
+	e := setup(t)
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".brain-login.sig"), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, page, _ := e.do(t, "GET", "/login", nil, "User-Agent", "curl")
+	c := challengeRe.FindStringSubmatch(page)[1]
+	tmpl := regexp.MustCompile(`value="print" data-template="([^"]*)"`).FindStringSubmatch(page)
+	if tmpl == nil {
+		t.Fatal("print variant missing")
+	}
+	cmdline := strings.ReplaceAll(html.UnescapeString(tmpl[1]), "{key}", e.key.priv)
+
+	shells := []string{"sh", "bash"}
+	if _, err := exec.LookPath("fish"); err == nil {
+		shells = append(shells, "fish")
+	}
+	for i, sh := range shells {
+		if i > 0 { // each challenge works once
+			_, page, _ = e.do(t, "GET", "/login", nil)
+			old := c
+			c = challengeRe.FindStringSubmatch(page)[1]
+			cmdline = strings.ReplaceAll(cmdline, old, c)
+		}
+		cmd := exec.Command(sh, "-c", cmdline)
+		cmd.Env = append(os.Environ(), "HOME="+home)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: %v", sh, err)
+		}
+		if leftovers, _ := filepath.Glob(filepath.Join(home, ".brain-login*")); len(leftovers) > 0 {
+			t.Errorf("%s left %v behind", sh, leftovers)
+		}
+		jar, _ := cookiejar.New(nil)
+		fresh := &env{ts: e.ts, client: &http.Client{Jar: jar}}
+		code, body, _ := fresh.do(t, "POST", "/login", url.Values{"challenge": {c}, "signature": {string(out)}})
+		if code != 200 || !strings.Contains(body, "antonio") {
+			t.Errorf("%s: login with the printed signature: %d", sh, code)
 		}
 	}
 }

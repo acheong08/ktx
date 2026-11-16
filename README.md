@@ -116,7 +116,7 @@ The server only needs your **public** key. Nothing secret goes in the config.
 
 1. `/login` shows a one-time challenge and a command to run:
    ```sh
-   printf '%s' 'brain-login:…' | ssh-keygen -Y sign -n brain-server -f ~/.ssh/id_ed25519 | wl-copy
+   rm -f ~/.brain-login.sig; printf '%s' 'brain-login:…' > ~/.brain-login && ssh-keygen -Y sign -n brain-server -f ~/.ssh/id_ed25519 ~/.brain-login && wl-copy < ~/.brain-login.sig; rm -f ~/.brain-login ~/.brain-login.sig
    ```
    - **How the signature reaches the clipboard** depends on your system:
      - macOS: `pbcopy`
@@ -126,6 +126,8 @@ The server only needs your **public** key. Nothing secret goes in the config.
    - **Choosing the default:** the page picks one from your browser's User-Agent. Browsers don't reveal Wayland vs X11, so Linux defaults to Wayland.
    - **Changing it:** pick a different method or key path on the page; both are remembered in the browser.
    - **Agent-held keys** (e.g. 1Password): use the path of the `.pub` file.
+   - **Why a file and not a pipe:** the challenge is written to a file so `ssh-keygen` can prompt for your key's passphrase on the terminal. Piped input takes over stdin, so `ssh-keygen` falls back to `ssh-askpass`, which usually isn't installed.
+   - **Shells:** the command works in bash, zsh, sh and fish.
 2. Paste the signature. The form submits itself once a full signature is pasted.
 
 How it's checked:

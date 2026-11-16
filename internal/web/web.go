@@ -146,11 +146,29 @@ type cmdVariant struct{ Value, Label, Template string }
 
 const defaultKeyPath = "~/.ssh/id_ed25519"
 
-var clipboards = []struct{ value, label, pipe string }{
-	{"macos", "macOS (pbcopy)", " | pbcopy"},
-	{"wayland", "Linux, Wayland (wl-copy)", " | wl-copy"},
-	{"x11", "Linux, X11 (xclip)", " | xclip -selection clipboard"},
-	{"print", "Print it", ""},
+// The challenge goes through a file rather than a pipe so ssh-keygen keeps
+// the terminal on stdin and can ask for the key's passphrase (with a pipe
+// it falls back to ssh-askpass, which most Linux setups don't have). The
+// syntax works in bash, zsh, sh and fish.
+var clipboards = []struct{ value, label, copy string }{
+	{"macos", "macOS (pbcopy)", "pbcopy < " + sigFile},
+	{"wayland", "Linux, Wayland (wl-copy)", "wl-copy < " + sigFile},
+	{"x11", "Linux, X11 (xclip)", "xclip -selection clipboard < " + sigFile},
+	{"print", "Print it", "cat " + sigFile},
+}
+
+const (
+	msgFile = "~/.brain-login"
+	sigFile = msgFile + ".sig"
+)
+
+// signCommand is the shell command for one clipboard variant, with "{key}"
+// where the key path goes. The leading rm avoids ssh-keygen's "overwrite?"
+// prompt if an earlier run left a signature behind.
+func signCommand(challenge, copy string) string {
+	return "rm -f " + sigFile + "; printf '%s' '" + challenge + "' > " + msgFile +
+		" && ssh-keygen -Y sign -n " + Namespace + " -f {key} " + msgFile +
+		" && " + copy + "; rm -f " + msgFile + " " + sigFile
 }
 
 // clipboardFor guesses the variant from a User-Agent. Linux browsers don't
@@ -173,7 +191,7 @@ func (u *UI) newLoginView(r *http.Request, challenge, errMsg string) loginView {
 	}
 	v := loginView{Assets: u.assets, Challenge: challenge, Selected: clipboardFor(r.UserAgent()), KeyPath: defaultKeyPath, Error: errMsg}
 	for _, c := range clipboards {
-		tmpl := "printf '%s' '" + challenge + "' | ssh-keygen -Y sign -n " + Namespace + " -f {key}" + c.pipe
+		tmpl := signCommand(challenge, c.copy)
 		v.Variants = append(v.Variants, cmdVariant{c.value, c.label, tmpl})
 		if c.value == v.Selected {
 			v.Command = strings.ReplaceAll(tmpl, "{key}", defaultKeyPath)
