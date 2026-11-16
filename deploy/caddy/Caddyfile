@@ -1,0 +1,36 @@
+# /etc/caddy/Caddyfile, installed from ktx deploy/caddy/Caddyfile.
+#
+# Add a site by dropping a file into /etc/caddy/Caddyfile.d/<name>.caddyfile:
+#
+#     grafana.internal.melzi.dev {
+#         reverse_proxy 127.0.0.1:3000
+#     }
+#
+# caddy-reload.path reloads Caddy when a file there changes. internal_dns
+# then creates the A record (pointing at this machine's tailnet address),
+# and the site uses the *.internal.melzi.dev wildcard certificate.
+{
+	# Listen on the tailnet address only. Nothing is served publicly.
+	default_bind 100.64.0.14
+
+	# Certificates via the Cloudflare DNS challenge (the box isn't reachable
+	# from the internet, so HTTP challenges can't work).
+	acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+
+	# Publish an A record for every site under internal.melzi.dev.
+	internal_dns {
+		zone melzi.dev
+		suffix internal.melzi.dev
+		provider cloudflare {env.CLOUDFLARE_API_TOKEN}
+		interface tailscale0
+	}
+}
+
+# Gets the wildcard certificate that every internal site shares, so single
+# hostnames don't show up in public certificate logs. Also answers names
+# that have no site.
+*.internal.melzi.dev {
+	respond "No site is configured for {host}." 404
+}
+
+import Caddyfile.d/*.caddyfile

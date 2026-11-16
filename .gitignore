@@ -1,0 +1,6 @@
+/data/
+/brain-server
+*.key
+known_hosts
+.env
+/development

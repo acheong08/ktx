@@ -1,0 +1,130 @@
+// Package config reads settings from environment variables.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Config holds every setting. See README.md for the variables.
+type Config struct {
+	ListenAddr     string
+	RepoURL        string
+	Branch         string
+	WorkDir        string
+	SSHKeyPath     string
+	KnownHostsPath string
+	AuthorName     string
+	AuthorEmail    string
+	Tokens         map[string]string // bearer token -> user name
+	SyncInterval   time.Duration
+	MaxUploadBytes int64
+
+	// UI. AuthorizedKeys is empty when the UI is off.
+	AuthorizedKeys string // authorized_keys lines: inline value plus file contents
+	SessionTTL     time.Duration
+	Types          []string // type suggestions when sorting
+}
+
+// Load reads the environment and reports every missing or invalid value.
+func Load() (Config, error) {
+	c := Config{
+		ListenAddr:     env("BRAIN_LISTEN_ADDR", ":8080"),
+		RepoURL:        os.Getenv("BRAIN_REPO_URL"),
+		Branch:         env("BRAIN_BRANCH", "main"),
+		WorkDir:        env("BRAIN_WORKDIR", "./data/repo"),
+		SSHKeyPath:     os.Getenv("BRAIN_SSH_KEY_PATH"),
+		KnownHostsPath: os.Getenv("BRAIN_SSH_KNOWN_HOSTS"),
+		AuthorName:     env("BRAIN_GIT_AUTHOR_NAME", "brain-server"),
+		AuthorEmail:    env("BRAIN_GIT_AUTHOR_EMAIL", "brain-server@users.noreply.github.com"),
+	}
+	var errs []error
+
+	if c.RepoURL == "" {
+		errs = append(errs, errors.New("BRAIN_REPO_URL is required (e.g. git@github.com:org/brain.git)"))
+	}
+
+	tokens, err := ParseTokens(os.Getenv("BRAIN_API_TOKENS"))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	c.Tokens = tokens
+
+	if c.SyncInterval, err = time.ParseDuration(env("BRAIN_SYNC_INTERVAL", "5m")); err != nil {
+		errs = append(errs, fmt.Errorf("BRAIN_SYNC_INTERVAL: %w", err))
+	}
+
+	mb, err := strconv.ParseInt(env("BRAIN_MAX_UPLOAD_MB", "10"), 10, 64)
+	if err != nil || mb <= 0 {
+		errs = append(errs, errors.New("BRAIN_MAX_UPLOAD_MB must be a positive integer"))
+	}
+	c.MaxUploadBytes = mb << 20
+
+	c.AuthorizedKeys = os.Getenv("BRAIN_UI_AUTHORIZED_KEYS")
+	if f := os.Getenv("BRAIN_UI_AUTHORIZED_KEYS_FILE"); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("BRAIN_UI_AUTHORIZED_KEYS_FILE: %w", err))
+		}
+		c.AuthorizedKeys = strings.TrimSpace(c.AuthorizedKeys + "\n" + string(b))
+	}
+	if c.SessionTTL, err = time.ParseDuration(env("BRAIN_UI_SESSION_TTL", "168h")); err != nil || c.SessionTTL <= 0 {
+		errs = append(errs, errors.New("BRAIN_UI_SESSION_TTL must be a positive duration like 168h"))
+	}
+	for _, t := range strings.Split(env("BRAIN_TRANSCRIPT_TYPES", "advisor,customer_discovery,investor,internal"), ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			c.Types = append(c.Types, t)
+		}
+	}
+
+	for _, p := range []struct{ name, path string }{
+		{"BRAIN_SSH_KEY_PATH", c.SSHKeyPath},
+		{"BRAIN_SSH_KNOWN_HOSTS", c.KnownHostsPath},
+	} {
+		if p.path != "" {
+			if _, err := os.Stat(p.path); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", p.name, err))
+			}
+		}
+	}
+	return c, errors.Join(errs...)
+}
+
+// ParseTokens reads "user:token,user:token". Each user name ends up in
+// commit trailers and in the uploaded_by field.
+func ParseTokens(s string) (map[string]string, error) {
+	tokens := map[string]string{}
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		user, token, ok := strings.Cut(pair, ":")
+		user, token = strings.TrimSpace(user), strings.TrimSpace(token)
+		if !ok || user == "" || token == "" {
+			return nil, errors.New(`BRAIN_API_TOKENS entries must look like "user:token"`)
+		}
+		if len(token) < 24 {
+			return nil, fmt.Errorf("BRAIN_API_TOKENS: token for %q is shorter than 24 characters (try: openssl rand -hex 32)", user)
+		}
+		if _, dup := tokens[token]; dup {
+			return nil, fmt.Errorf("BRAIN_API_TOKENS: token for %q is used twice", user)
+		}
+		tokens[token] = user
+	}
+	if len(tokens) == 0 {
+		return nil, errors.New(`BRAIN_API_TOKENS is required, e.g. "antonio:<token>,maxim:<token>"`)
+	}
+	return tokens, nil
+}
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}

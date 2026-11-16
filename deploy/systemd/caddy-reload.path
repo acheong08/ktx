@@ -1,0 +1,10 @@
+[Unit]
+Description=Reload Caddy when /etc/caddy changes
+
+[Path]
+PathChanged=/etc/caddy/Caddyfile
+PathModified=/etc/caddy/Caddyfile.d
+PathChanged=/etc/caddy/caddy.env
+
+[Install]
+WantedBy=multi-user.target

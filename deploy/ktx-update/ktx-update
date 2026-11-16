@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# ktx-update: install the latest GitHub release of ktx if it is new.
+#
+# Run every minute by ktx-update.timer. The release workflow attaches
+# ktx_<tag>_linux_<arch>.tar.gz (brain-server + caddy) and SHA256SUMS.
+# This script:
+#   1. asks GitHub for the latest release (a conditional request, so polling
+#      doesn't use up the API rate limit),
+#   2. downloads and checksums the archive for this machine,
+#   3. unpacks it to /opt/ktx/releases/<tag> and points /opt/ktx/current at it,
+#   4. restarts brain-server (and Caddy, if its binary changed),
+#   5. rolls back if either doesn't come up healthy, and won't retry that tag.
+set -euo pipefail
+
+REPO=${KTX_REPO:-acheong08/ktx}
+API=${KTX_API:-https://api.github.com}
+ROOT=${KTX_ROOT:-/opt/ktx}
+STATE=${KTX_STATE:-/var/lib/ktx-update}
+HEALTH_URL=${KTX_HEALTH_URL:-http://127.0.0.1:8080/healthz}
+KEEP=3
+
+case $(uname -m) in
+aarch64 | arm64) ARCH=arm64 ;;
+x86_64 | amd64) ARCH=amd64 ;;
+*) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
+esac
+
+log() { echo "ktx-update: $*"; }
+
+mkdir -p "$STATE" "$ROOT/releases"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+etag=$(cat "$STATE/etag" 2>/dev/null || true)
+code=$(curl -sS --max-time 30 -o "$tmp/release.json" -D "$tmp/headers" -w '%{http_code}' \
+	-H 'Accept: application/vnd.github+json' ${etag:+-H "If-None-Match: $etag"} \
+	"$API/repos/$REPO/releases/latest")
+case $code in
+304) exit 0 ;;
+404) log "no releases yet"; exit 0 ;;
+200) ;;
+*) log "GitHub API answered $code" >&2; exit 1 ;;
+esac
+new_etag=$(grep -i '^etag:' "$tmp/headers" | head -1 | cut -d' ' -f2- | tr -d '\r' || true)
+save_etag() { [ -z "$new_etag" ] || printf '%s' "$new_etag" >"$STATE/etag"; }
+
+tag=$(jq -r .tag_name "$tmp/release.json")
+if ! [[ $tag =~ ^[A-Za-z0-9._-]+$ ]]; then
+	log "refusing odd tag name '$tag'" >&2
+	exit 1
+fi
+current=$(basename "$(readlink "$ROOT/current" 2>/dev/null || echo none)")
+if [ "$tag" = "$current" ]; then save_etag; exit 0; fi
+if [ -e "$STATE/failed-$tag" ]; then save_etag; exit 0; fi
+
+asset="ktx_${tag}_linux_${ARCH}.tar.gz"
+url=$(jq -r --arg n "$asset" '.assets[] | select(.name == $n) | .browser_download_url' "$tmp/release.json")
+sums=$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .browser_download_url' "$tmp/release.json")
+if [ -z "$url" ] || [ -z "$sums" ]; then
+	log "release $tag has no $asset or SHA256SUMS yet (the build may still be running)"
+	exit 0 # etag not saved: check again next time
+fi
+
+log "installing $tag (was $current)"
+curl -fsSL --max-time 300 -o "$tmp/$asset" "$url"
+curl -fsSL --max-time 30 -o "$tmp/SHA256SUMS" "$sums"
+(cd "$tmp" && grep -E "  $asset\$" SHA256SUMS | sha256sum -c --quiet -)
+
+dest="$ROOT/releases/$tag"
+rm -rf "$dest.tmp" && mkdir -p "$dest.tmp"
+tar -xzf "$tmp/$asset" -C "$dest.tmp" brain-server caddy
+chmod 755 "$dest.tmp"/brain-server "$dest.tmp"/caddy
+rm -rf "$dest" && mv "$dest.tmp" "$dest"
+
+prev=$(readlink "$ROOT/current" 2>/dev/null || true)
+point() { ln -sfn "$1" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"; }
+
+# Restart (and health-check) Caddy only if it is running and its binary changed.
+caddy_changed=no
+if systemctl is-active --quiet caddy.service && ! { [ -n "$prev" ] && cmp -s "$prev/caddy" "$dest/caddy"; }; then
+	caddy_changed=yes
+fi
+
+healthy() {
+	local i
+	for i in $(seq 1 30); do
+		if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1 &&
+			{ [ $caddy_changed = no ] || systemctl is-active --quiet caddy.service; }; then
+			return 0
+		fi
+		sleep 2
+	done
+	return 1
+}
+
+restart() {
+	systemctl restart brain-server.service
+	if [ $caddy_changed = yes ]; then
+		systemctl restart caddy.service
+	fi
+}
+
+point "$dest"
+restart
+if healthy; then
+	log "now running $tag"
+	save_etag
+	# Keep the newest few releases, never the one in use.
+	ls -1dt "$ROOT"/releases/*/ | tail -n +$((KEEP + 1)) | while read -r old; do
+		[ "${old%/}" = "$dest" ] || rm -rf "$old"
+	done
+	exit 0
+fi
+
+log "$tag did not come up healthy; rolling back to ${prev:-nothing}" >&2
+touch "$STATE/failed-$tag"
+if [ -n "$prev" ]; then
+	point "$prev"
+	restart # with caddy_changed as before, so a failed new Caddy is restarted on the old binary
+fi
+save_etag
+exit 1

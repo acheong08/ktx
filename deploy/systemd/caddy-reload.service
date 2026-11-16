@@ -1,0 +1,11 @@
+[Unit]
+Description=Reload Caddy after a config change
+After=caddy.service
+
+[Service]
+Type=oneshot
+# Let editors finish writing (several writes can arrive at once).
+ExecStartPre=/usr/bin/sleep 1
+# Reload a running Caddy. Start a stopped one (e.g. right after the token
+# is added). A changed token in a running Caddy needs: systemctl restart caddy
+ExecStart=/usr/bin/systemctl reload-or-restart caddy.service

@@ -1,0 +1,243 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+)
+
+templ layout(title string, user string, a assets) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · brain</title>
+			<link rel="stylesheet" href={ a.CSS }/>
+			<script src={ a.HTMX } defer></script>
+			<script src={ a.JS } defer></script>
+		</head>
+		<body>
+			<header class="top">
+				<a class="brand" href="/">brain</a>
+				if user != "" {
+					<nav><a href="/">Transcripts</a></nav>
+					<form class="logout" method="post" action="/logout">
+						<span class="user">{ user }</span>
+						<button type="submit" class="link">Log out</button>
+					</form>
+				}
+			</header>
+			<main>
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
+
+templ flashBox(f flash) {
+	if f.Text != "" {
+		<p class={ "flash", f.Kind } role="status">{ f.Text }</p>
+	}
+}
+
+templ errorPage(user string, a assets, msg string) {
+	@layout("Error", user, a) {
+		@flashBox(flash{"error", msg})
+		<p><a href="/">Back to transcripts</a></p>
+	}
+}
+
+templ loginPage(v loginView) {
+	@layout("Log in", "", v.Assets) {
+		<section class="login">
+			<h1>Log in</h1>
+			<p>Sign this challenge with an SSH key from the server's authorized keys. It expires in 5 minutes and works once.</p>
+			<div class="command">
+				<pre id="login-cmd">{ v.Command }</pre>
+				<button type="button" data-copy="#login-cmd">Copy</button>
+			</div>
+			<p class="hint">
+				Change <code>-f</code> to use another key. For a key held by an agent (e.g. 1Password),
+				point <code>-f</code> at its <code>.pub</code> file. Drop <code>| pbcopy</code> to print the signature instead.
+			</p>
+			@flashBox(flash{"error", v.Error})
+			<form method="post" action="/login" id="login-form">
+				<input type="hidden" name="challenge" value={ v.Challenge }/>
+				<label for="signature">Signature</label>
+				<textarea id="signature" name="signature" rows="7" required autofocus spellcheck="false" placeholder="-----BEGIN SSH SIGNATURE-----"></textarea>
+				<button type="submit" class="primary">Log in</button>
+			</form>
+		</section>
+	}
+}
+
+templ listPage(user string, v listView) {
+	@layout("Transcripts", user, v.Assets) {
+		<form id="filters" class="filters" action="/" method="get" hx-get="/" hx-target="#results" hx-push-url="true" hx-trigger="input delay:300ms, submit">
+			<input class="filter-field" type="search" name="q" value={ v.Q } placeholder="Search titles, people, tags, text…" aria-label="Search" autocomplete="off"/>
+			<select class="filter-field" name="sort" aria-label="Sort">
+				for _, o := range sortOptions {
+					<option value={ o.Value } selected?={ o.Value == v.Sort }>{ o.Label }</option>
+				}
+			</select>
+		</form>
+		<div id="results">
+			@results(v)
+		</div>
+	}
+}
+
+templ typeDatalist(types []string) {
+	<datalist id="type-options">
+		for _, t := range types {
+			<option value={ t }></option>
+		}
+	</datalist>
+}
+
+templ results(v listView) {
+	<input class="filter-field" type="hidden" name="folder" value={ v.Folder } form="filters"/>
+	@flashBox(v.Flash)
+	<nav class="tabs">
+		for _, t := range v.Tabs {
+			<a href={ templ.URL(t.URL) } hx-get={ t.URL } hx-target="#results" hx-push-url="true" class={ "tab", templ.KV("active", t.Active) }>
+				{ t.Label } <span class="count">{ strconv.Itoa(t.Count) }</span>
+			</a>
+		}
+		if v.UnsortedCount > 0 {
+			<a class="button sort-next" href="/sort">Sort { strconv.Itoa(v.UnsortedCount) } unsorted →</a>
+		}
+	</nav>
+	@typeDatalist(v.Types)
+	if len(v.Entries) == 0 {
+		<p class="empty">
+			if v.Q != "" {
+				Nothing matches “{ v.Q }”.
+			} else if v.Folder == "unsorted" {
+				Nothing left to sort.
+			} else {
+				No transcripts yet.
+			}
+		</p>
+	} else {
+		<table class="transcripts">
+			<thead>
+				<tr><th>Date</th><th>Conversation</th><th>Participants</th><th>Type</th></tr>
+			</thead>
+			<tbody>
+				for _, e := range v.Entries {
+					<tr>
+						<td class="date">{ fmtDate(e) }</td>
+						<td>
+							if e.ID != "" {
+								<a href={ templ.URL("/transcripts/" + e.ID) }>{ e.Label() }</a>
+							} else {
+								{ e.Label() }
+							}
+							if len(e.Problems) > 0 {
+								<span class="badge warn" title={ strings.Join(e.Problems, "\n") }>check</span>
+							}
+							if e.Meta.Source != "" || len(e.Meta.Tags) > 0 {
+								<div class="sub">
+									{ e.Meta.Source }
+									for _, tag := range e.Meta.Tags {
+										<span class="tag">{ tag }</span>
+									}
+								</div>
+							}
+						</td>
+						<td class="people">{ participantSummary(e) }</td>
+						<td class="type">
+							if e.ID != "" {
+								<input type="text" name="type" list="type-options" value={ typeValue(e) } placeholder="unsorted" aria-label={ "Type of " + e.Label() } autocomplete="off" hx-post={ "/transcripts/" + e.ID + "/type" } data-enter-commits hx-trigger="change" hx-sync="this:drop" hx-target="#results" hx-include=".filter-field"/>
+							} else {
+								{ e.Folder }
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+}
+
+templ detailPage(user string, v detailView) {
+	@layout(v.Entry.Label(), user, v.Assets) {
+		<p class="back"><a href={ templ.URL(v.BackURL) }>← { v.BackLabel }</a></p>
+		<article class="transcript">
+			<h1>{ v.Entry.Label() }</h1>
+			@flashBox(v.Flash)
+			if len(v.Entry.Problems) > 0 {
+				<div class="flash warn">
+					This file doesn't meet the upload rules:
+					<ul>
+						for _, p := range v.Entry.Problems {
+							<li>{ p }</li>
+						}
+					</ul>
+				</div>
+			}
+			if v.Entry.ID != "" {
+				<form class="retype" method="post" action={ templ.URL("/transcripts/" + v.Entry.ID + "/type") }>
+					<label for="type">Type</label>
+					<input id="type" type="text" name="type" list="type-options" value={ typeValue(v.Entry) } placeholder="unsorted" autocomplete="off"/>
+					@typeDatalist(v.Types)
+					<button type="submit" name="then" value="stay">Save</button>
+					<button type="submit" name="then" value="next" class="primary">Save and next unsorted →</button>
+				</form>
+			}
+			<dl class="meta">
+				<dt>When</dt>
+				<dd>
+					{ fmtDate(v.Entry) }
+					if v.Entry.Meta.DurationMinutes > 0 {
+						· { strconv.Itoa(v.Entry.Meta.DurationMinutes) } min
+					}
+				</dd>
+				<dt>Participants</dt>
+				<dd>
+					<ul class="plain">
+						for _, p := range v.Entry.Meta.Participants {
+							<li>
+								{ participantLine(p) }
+								if p.Email != "" {
+									<a href={ templ.URL("mailto:" + p.Email) }>{ p.Email }</a>
+								}
+							</li>
+						}
+					</ul>
+				</dd>
+				if v.Entry.Meta.Source != "" {
+					<dt>Source</dt>
+					<dd>
+						{ v.Entry.Meta.Source }
+						if v.Entry.Meta.SourceID != "" {
+							<code>{ v.Entry.Meta.SourceID }</code>
+						}
+					</dd>
+				}
+				if len(v.Entry.Meta.Tags) > 0 {
+					<dt>Tags</dt>
+					<dd>
+						for _, tag := range v.Entry.Meta.Tags {
+							<span class="tag">{ tag }</span>
+						}
+					</dd>
+				}
+				<dt>Stored</dt>
+				<dd>
+					<code>{ v.Entry.Path }</code>
+					if v.Entry.UploadedBy != "" {
+						· uploaded by { v.Entry.UploadedBy }
+					}
+					if v.Entry.IngestedAt != "" {
+						· first ingested { v.Entry.IngestedAt }
+					}
+				</dd>
+			</dl>
+			<div class="body">
+				@templ.Raw(v.BodyHTML)
+			</div>
+		</article>
+	}
+}

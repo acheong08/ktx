@@ -1,0 +1,22 @@
+[Unit]
+Description=ktx brain-server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=ktx
+Group=ktx
+EnvironmentFile=/etc/ktx/brain-server.env
+ExecStart=/opt/ktx/current/brain-server
+Restart=on-failure
+RestartSec=5s
+StateDirectory=ktx
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ktx
+
+[Install]
+WantedBy=multi-user.target
