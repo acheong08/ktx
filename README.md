@@ -134,6 +134,12 @@ A connection is a service ktx pulls from, with one person's credential. You add 
   - **Edits:** a note edited later overwrites its file; git keeps the history.
   - **Schedule:** every 10 minutes, plus **Sync now**.
 
+- **Pocket** (API key from the Pocket app) → `transcripts/internal/` by default (set per connection), with Pocket's AI summary and the timestamped transcript.
+  - **Participants:** Pocket rarely knows who spoke (speakers come back as `SPEAKER_00`), so each connection can list its usual participants. Otherwise the owner is listed.
+  - **What gets fetched:** completed recordings only; the "Getting Started with Pocket" sample is skipped. The first sync fetches everything.
+  - **Re-reads:** later syncs re-read the last week of recordings, because editing a summary in Pocket doesn't change the recording's `updated_at`. Unchanged ones aren't committed.
+  - **Schedule:** every 15 minutes, plus **Sync now**.
+
 How a run works ([internal/connectors](internal/connectors/connectors.go)):
 1. **Fetch:** the connector fetches everything changed since the connection's bookmark.
 2. **Commit:** ktx writes it as **one commit per run** (in batches of 50), with `Connection:` and `Uploaded-By: <owner>` trailers.

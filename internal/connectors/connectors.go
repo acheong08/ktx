@@ -40,7 +40,11 @@ type Field struct {
 type Config struct {
 	Secrets  map[string]string
 	Settings map[string]string
+	Owner    Person // whose connection it is (empty in Check)
 }
+
+// Person is someone ktx knows, e.g. a connection's owner.
+type Person struct{ Name, Email string }
 
 // Connector talks to one outside service.
 type Connector interface {
@@ -284,6 +288,12 @@ func (m *Manager) RunOnce(ctx context.Context, id int64, kind Connector, trigger
 
 func (m *Manager) config(conn state.Connection) (Config, error) {
 	cfg := Config{Settings: conn.Settings, Secrets: map[string]string{}}
+	if u, err := m.db.UserByID(conn.OwnerID); err == nil {
+		cfg.Owner = Person{Name: u.Name, Email: u.Email}
+		if cfg.Owner.Name == "" {
+			cfg.Owner.Name = u.Display()
+		}
+	}
 	if len(conn.Secrets) == 0 {
 		return cfg, nil
 	}
