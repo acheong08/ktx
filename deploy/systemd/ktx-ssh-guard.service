@@ -4,3 +4,25 @@ Description=Close public SSH while Tailscale is healthy
 [Service]
 Type=oneshot
 ExecStart=/usr/local/libexec/ktx-ssh-guard
+
+# Only needs to change firewall rules and ask tailscaled for its state.
+# If this sandbox ever breaks the guard, it fails open (SSH stays reachable).
+ProtectSystem=strict
+ReadWritePaths=/run
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native

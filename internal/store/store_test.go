@@ -132,3 +132,59 @@ func gitOut(t *testing.T, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+func meeting(t *testing.T, sourceID, title, body string) *transcript.Doc {
+	t.Helper()
+	doc, err := transcript.Parse([]byte("---\ntitle: " + title + "\ndate: 2026-11-15T17:00:00Z\nparticipants: [Antonio <ac@melzi.dev>]\nsource: granola\nsource_id: " + sourceID + "\n---\n" + body + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+func TestPutBatchMeetings(t *testing.T) {
+	s, remote := newStore(t)
+	ctx := context.Background()
+	items := []Item{
+		{Doc: meeting(t, "not_1", "Acme intro", "hello"), Collection: Meetings},
+		{Doc: meeting(t, "not_2", "Board prep", "numbers"), Collection: Meetings},
+	}
+	res, git, err := s.PutBatch(ctx, items, "antonio", "Sync granola", "Connection: granola/Antonio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 2 || res[0].Result != ResultCreated || !strings.HasPrefix(res[0].Path, "meetings/2026-11-15-1700-acme-intro-") || !git.Pushed {
+		t.Fatalf("results: %+v %+v", res, git)
+	}
+	if n := gitOut(t, "--git-dir", remote, "rev-list", "--count", "main"); n != "1" {
+		t.Errorf("want one commit for the batch, got %s", n)
+	}
+	msg := gitOut(t, "--git-dir", remote, "log", "-1", "--format=%B", "main")
+	for _, want := range []string{"Sync granola: 2 added, 0 updated", "- created meetings/", "Uploaded-By: antonio", "Connection: granola/Antonio"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q:\n%s", want, msg)
+		}
+	}
+
+	// Same batch again: nothing to commit. One changed: a single-item message.
+	items[0].Doc = meeting(t, "not_1", "Acme intro", "hello")
+	items[1].Doc = meeting(t, "not_2", "Board prep", "numbers, revised")
+	res, _, err = s.PutBatch(ctx, items, "antonio", "Sync granola")
+	if err != nil || res[0].Result != ResultUnchanged || res[1].Result != ResultUpdated {
+		t.Fatalf("second batch: %+v %v", res, err)
+	}
+	if msg := gitOut(t, "--git-dir", remote, "log", "-1", "--format=%s", "main"); !strings.HasPrefix(msg, "Update meeting: Board prep") {
+		t.Errorf("subject = %q", msg)
+	}
+
+	entries, err := s.List()
+	if err != nil || len(entries) != 2 || entries[0].Collection != Meetings || entries[0].Folder != "meetings" {
+		t.Fatalf("list: %+v %v", entries, err)
+	}
+	if _, err := s.SetType(ctx, entries[0].ID, "advisor", "antonio"); err != ErrNotSortable {
+		t.Errorf("SetType on a meeting: %v", err)
+	}
+	if _, _, err := s.PutBatch(ctx, []Item{{Doc: items[0].Doc, Collection: "elsewhere"}}, "a", ""); err == nil {
+		t.Error("unknown collection accepted")
+	}
+}

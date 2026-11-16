@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Daily copy of Pocket ID's database (users, passkeys, OIDC clients).
+# It is the one piece of state on the box that can't be rebuilt. Restoring also
+# needs /etc/pocket-id/secrets/encryption_key, which is backed up alongside.
+set -euo pipefail
+DEST=/var/backups/pocket-id
+KEEP=14
+install -d -m 700 "$DEST"
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+sqlite3 /var/lib/pocket-id/pocket-id.db ".backup '$DEST/pocket-id-$stamp.db'"
+cp /etc/pocket-id/secrets/encryption_key "$DEST/encryption_key"
+chmod 600 "$DEST"/*
+ls -1t "$DEST"/pocket-id-*.db | tail -n +$((KEEP + 1)) | xargs -r rm -f
+echo "backed up to $DEST/pocket-id-$stamp.db"

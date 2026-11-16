@@ -42,7 +42,11 @@ header.top {
   padding: .6rem 1.5rem; border-bottom: 1px solid var(--line);
 }
 .brand { font-weight: 700; color: var(--fg); }
-header nav { flex: 1; }
+header nav { flex: 1; display: flex; gap: 1rem; }
+header nav a { color: var(--muted); }
+header nav a.active { color: var(--fg); font-weight: 600; }
+.account { display: flex; align-items: center; gap: .75rem; color: var(--muted); }
+button.link { background: none; border: 0; color: var(--accent); padding: 0; }
 
 input, select, textarea, button {
   font: inherit; color: inherit;
@@ -95,3 +99,26 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain a { margin-left: .4rem; font-size: 14px; }
 .body { border-top: 1px solid var(--line); padding-top: 1rem; max-width: 75ch; }
 .body p { margin: 0 0 .8rem; }
+
+h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
+.lead { color: var(--muted); margin: -.5rem 0 1.25rem; max-width: 70ch; }
+.muted { color: var(--muted); }
+.error-text { color: var(--err); }
+.badge { font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 .35rem; margin-left: .35rem; color: var(--muted); }
+.badge.ok { color: var(--ok); border-color: currentColor; }
+table.list { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+.list th { text-align: left; font-weight: 600; color: var(--muted); font-size: 13px; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
+.list td { padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.list td.actions { text-align: right; white-space: nowrap; }
+.kinds { list-style: none; padding: 0; display: grid; gap: .5rem; }
+.kinds li { display: flex; gap: .75rem; align-items: baseline; }
+form.settings { display: grid; gap: .35rem; max-width: 34rem; margin: 1rem 0 2rem; }
+form.settings label { font-weight: 600; margin-top: .6rem; }
+form.settings button { justify-self: start; margin-top: .8rem; }
+.help { color: var(--muted); font-size: 13px; margin: 0; }
+label.check { display: flex; gap: .5rem; align-items: center; font-weight: normal !important; }
+form.inline { margin: 0 0 1rem; }
+form.danger { display: flex; gap: 1rem; align-items: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); }
+.command { display: flex; gap: .5rem; align-items: flex-start; }
+.command pre { flex: 1; margin: 0; padding: .6rem .8rem; background: var(--soft); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--fg); }
+.narrow { max-width: 40rem; margin: 2rem auto; }

@@ -15,10 +15,14 @@ import (
 	"time"
 
 	"github.com/acheong08/ktx/internal/gitrepo"
+	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
 )
 
 const token = "test-token-0123456789abcdef"
+
+// dbToken is a per-person token created in the state database by setup.
+var dbToken string
 
 const upload = `---
 title: Intro call with Acme
@@ -51,7 +55,14 @@ func setup(t *testing.T) (*httptest.Server, string, string) {
 	st := store.New(repo)
 	st.SetClock(func() time.Time { return time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC) })
 	mux := http.NewServeMux()
-	New(st, map[string]string{token: "maxim"}, 1<<20, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(mux)
+	db, err := state.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	u, _ := db.Login("sub-a", "antonio", "", "", true)
+	dbToken, _ = db.CreateAPIToken(u.ID, "test")
+	New(st, map[string]string{token: "maxim"}, db, 1<<20, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(mux)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts, remote, repo.Dir()
@@ -172,6 +183,17 @@ func TestUpdateWithoutTypeKeepsHandSortedFolder(t *testing.T) {
 	}
 	if tree := git(t, "--git-dir", remote, "ls-tree", "-r", "--name-only", "main"); tree != "transcripts/investor/"+name {
 		t.Errorf("remote tree = %q", tree)
+	}
+}
+
+func TestDatabaseToken(t *testing.T) {
+	ts, remote, _ := setup(t)
+	code, out := post(t, ts, dbToken, upload)
+	if code != http.StatusCreated {
+		t.Fatalf("upload with a UI-created token: %d %v", code, out)
+	}
+	if msg := git(t, "--git-dir", remote, "log", "-1", "--format=%B", "main"); !strings.Contains(msg, "Uploaded-By: antonio") {
+		t.Errorf("attribution:\n%s", msg)
 	}
 }
 

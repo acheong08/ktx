@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# pocket-id-provision: set up Pocket ID for ktx, through its API (static
+# admin key over the Unix socket). Safe to run again.
+#
+#   pocket-id-provision                 groups + the ktx OIDC client (+ its secret)
+#   pocket-id-provision invite USERNAME EMAIL [--admin]
+#                                       create a user and print a one-time sign-in link
+#
+# Groups: "melzi" (everyone; may use ktx) and "ktx-admins" (ktx admins).
+# The ktx client secret is written to /etc/ktx/oidc-client-secret (root:ktx 640);
+# it is never printed.
+set -euo pipefail
+
+SOCK=/run/pocket-id/pocket-id.sock
+KEY=$(cat /etc/pocket-id/secrets/static_api_key)
+APP_URL=https://id.internal.melzi.dev
+KTX_URL=${KTX_URL:-https://brain.internal.melzi.dev}
+SECRET_FILE=/etc/ktx/oidc-client-secret
+
+api() { # METHOD PATH [JSON]
+	local out code
+	out=$(curl -sS --globoff --unix-socket "$SOCK" -X "$1" -H "X-API-KEY: $KEY" -H 'Content-Type: application/json' \
+		${3:+--data "$3"} -w '\n%{http_code}' "http://pocket-id/api$2")
+	code=${out##*$'\n'}
+	out=${out%$'\n'*}
+	if [ "$code" -ge 400 ] && [ "${ALLOW_404:-}" != 1 -o "$code" != 404 ]; then
+		echo "pocket-id API $1 $2 -> $code: $out" >&2
+		return 1
+	fi
+	[ "$code" = 404 ] && return 4
+	printf '%s' "$out"
+}
+
+group_id() { # NAME FRIENDLY -> id (created if missing)
+	local id
+	id=$(api GET "/user-groups?pagination[limit]=100" | jq -r --arg n "$1" '.data[] | select(.name == $n) | .id')
+	if [ -z "$id" ]; then
+		id=$(api POST /user-groups "$(jq -n --arg n "$1" --arg f "$2" '{name: $n, friendlyName: $f}')" | jq -r .id)
+		echo "created group $1" >&2
+	fi
+	printf '%s' "$id"
+}
+
+if [ "${1:-}" = invite ]; then
+	user=${2:?username}
+	email=${3:?email}
+	admin=false
+	[ "${4:-}" = --admin ] && admin=true
+	melzi=$(group_id melzi "Melzi")
+	groups=$(jq -n --arg m "$melzi" '[$m]')
+	if [ $admin = true ]; then
+		groups=$(jq -n --arg m "$melzi" --arg a "$(group_id ktx-admins "ktx admins")" '[$m, $a]')
+	fi
+	id=$(api GET "/users?pagination[limit]=100" | jq -r --arg u "$user" '.data[] | select(.username == $u) | .id')
+	if [ -z "$id" ]; then
+		id=$(api POST /users "$(jq -n --arg u "$user" --arg e "$email" --argjson a $admin \
+			'{username: $u, email: $e, emailVerified: true, firstName: ($u | ascii_upcase[0:1] + $u[1:]), isAdmin: $a}')" | jq -r .id)
+		echo "created user $user" >&2
+	fi
+	api PUT "/users/$id/user-groups" "$(jq -n --argjson g "$groups" '{userGroupIds: $g}')" >/dev/null
+	token=$(api POST "/users/$id/one-time-access-token" '{"ttl":"24h"}' | jq -r .token)
+	echo "One-time sign-in link for $user (valid 24 hours, single use; add a passkey after signing in):"
+	echo "  $APP_URL/lc/$token"
+	exit 0
+fi
+
+melzi=$(group_id melzi "Melzi")
+group_id ktx-admins "ktx admins" >/dev/null
+
+client=$(jq -n --arg cb "$KTX_URL/auth/callback" --arg launch "$KTX_URL" '{
+	id: "ktx", name: "ktx", callbackURLs: [$cb], logoutCallbackURLs: [],
+	isPublic: false, pkceEnabled: true, skipConsent: true, isGroupRestricted: true, launchURL: $launch
+}')
+created=""
+if ! ALLOW_404=1 api GET /oidc/clients/ktx >/dev/null; then
+	created=$(api POST /oidc/clients "$client")
+	echo "created OIDC client ktx" >&2
+else
+	api PUT /oidc/clients/ktx "$(jq 'del(.id)' <<<"$client")" >/dev/null
+fi
+api PUT /oidc/clients/ktx/allowed-user-groups "$(jq -n --arg m "$melzi" '{userGroupIds: [$m]}')" >/dev/null
+
+if [ ! -s "$SECRET_FILE" ]; then
+	secret=$(jq -r '.createdSecret.secret // empty' <<<"$created")
+	if [ -z "$secret" ]; then
+		secret=$(api POST /oidc/clients/ktx/secrets '{}' | jq -r .secret)
+	fi
+	install -m 640 -o root -g ktx /dev/null "$SECRET_FILE"
+	printf '%s' "$secret" >"$SECRET_FILE"
+	echo "wrote the ktx client secret to $SECRET_FILE" >&2
+fi
+echo "Pocket ID is set up for ktx (client ktx, groups melzi and ktx-admins)."

@@ -1,0 +1,2 @@
+# /etc/tmpfiles.d/pocket-id.conf: socket directory shared with Caddy.
+d /run/pocket-id 0750 pocketid caddy -

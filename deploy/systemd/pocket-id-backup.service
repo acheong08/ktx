@@ -1,0 +1,26 @@
+[Unit]
+Description=Back up the Pocket ID database
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/pocket-id-backup
+
+ProtectSystem=strict
+ReadWritePaths=/var/backups /var/lib/pocket-id
+PrivateNetwork=true
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
 	"github.com/acheong08/ktx/internal/transcript"
 )
@@ -20,14 +21,16 @@ import (
 // Server handles API requests.
 type Server struct {
 	store    *store.Store
-	tokens   map[string]string // bearer token -> user name
+	tokens   map[string]string // tokens from BRAIN_API_TOKENS: token -> user name
+	db       *state.DB         // per-person tokens created in the UI; may be nil
 	maxBytes int64
 	log      *slog.Logger
 }
 
-// New builds a Server. tokens maps each bearer token to the name of its user.
-func New(st *store.Store, tokens map[string]string, maxBytes int64, log *slog.Logger) *Server {
-	return &Server{store: st, tokens: tokens, maxBytes: maxBytes, log: log}
+// New builds a Server. tokens maps configured bearer tokens to user names;
+// db, if not nil, also accepts tokens people create in the web UI.
+func New(st *store.Store, tokens map[string]string, db *state.DB, maxBytes int64, log *slog.Logger) *Server {
+	return &Server{store: st, tokens: tokens, db: db, maxBytes: maxBytes, log: log}
 }
 
 // Register adds the API routes to mux.
@@ -43,10 +46,16 @@ type ctxUser struct{}
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if ok {
+		if ok && got != "" {
 			for token, user := range s.tokens {
 				if subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1 {
 					next(w, r.WithContext(context.WithValue(r.Context(), ctxUser{}, user)))
+					return
+				}
+			}
+			if s.db != nil {
+				if u, err := s.db.APITokenUser(got); err == nil {
+					next(w, r.WithContext(context.WithValue(r.Context(), ctxUser{}, u.Display())))
 					return
 				}
 			}

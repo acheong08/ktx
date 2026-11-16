@@ -1,0 +1,33 @@
+# /etc/containers/systemd/pocket-id.container (Podman Quadlet -> pocket-id.service)
+#
+# Pocket ID, the identity provider (passkeys, OIDC) at id.internal.melzi.dev.
+# Sandbox: no network at all (Caddy reaches it through a Unix socket),
+# non-root user, read-only image, all capabilities dropped. podman-auto-update
+# follows the v2 tag and rolls back if the new image doesn't start.
+[Unit]
+Description=Pocket ID (identity provider)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/pocket-id/pocket-id:v2-distroless
+ContainerName=pocket-id
+AutoUpdate=registry
+Network=none
+User=@POCKETID_UID@
+Group=@POCKETID_GID@
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+EnvironmentFile=/etc/pocket-id/pocket-id.env
+Volume=/var/lib/pocket-id:/app/data:Z
+Volume=/etc/pocket-id/secrets:/run/secrets:ro,Z
+Volume=/run/pocket-id:/run/pocket-id:z
+
+[Service]
+Restart=always
+RestartSec=5s
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

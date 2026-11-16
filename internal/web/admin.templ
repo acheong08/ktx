@@ -1,0 +1,238 @@
+package web
+
+import "strconv"
+
+templ connectionsPage(v connectionsView) {
+	@layout("Connections", v.Chrome) {
+		<h1>Connections</h1>
+		<p class="lead">Services ktx pulls documents from on a schedule. Each connection uses one person's credential; it is stored encrypted and never shown again.</p>
+		@flashBox(v.Flash)
+		if v.NoKey {
+			@flashBox(flash{"warn", "No master key is configured, so credentials can't be stored and connections don't run. See BRAIN_MASTER_KEY_FILE in the README."})
+		}
+		@connectionsTable(v)
+		<h2>Add a connection</h2>
+		<ul class="kinds">
+			for _, k := range v.Kinds {
+				<li>
+					<a class="button" href={ templ.URL("/connections/new?kind=" + k.Kind()) }>{ k.Title() }</a>
+					<span class="muted">{ k.Description() }</span>
+				</li>
+			}
+		</ul>
+	}
+}
+
+templ connectionsTable(v connectionsView) {
+	<div id="connections" if v.Polling { hx-get="/connections" hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML" }>
+		if len(v.Rows) == 0 {
+			<p class="empty">No connections yet.</p>
+		} else {
+			<table class="list">
+				<thead>
+					<tr><th>Name</th><th>Service</th><th>Owner</th><th>Last sync</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, row := range v.Rows {
+						<tr>
+							<td>
+								<a href={ templ.URL("/connections/" + strconv.FormatInt(row.Conn.ID, 10)) }>{ row.Conn.Label }</a>
+								if !row.Conn.Enabled {
+									<span class="badge">disabled</span>
+								}
+								if row.Conn.Account != "" {
+									<div class="sub">{ row.Conn.Account }</div>
+								}
+							</td>
+							<td>{ row.Title }</td>
+							<td>{ row.Conn.Owner }</td>
+							<td>
+								if row.Syncing {
+									<span class="badge ok">syncing…</span>
+								} else if row.Last != nil {
+									{ ago(row.Last.StartedAt) } · { runSummary(*row.Last) }
+									if row.Last.Error != "" {
+										<div class="sub error-text">{ row.Last.Error }</div>
+									}
+								} else {
+									<span class="muted">not yet</span>
+								}
+							</td>
+							<td class="actions">
+								if row.Conn.Enabled && !v.NoKey {
+									<form method="post" action={ templ.URL("/connections/" + strconv.FormatInt(row.Conn.ID, 10) + "/sync") }>
+										<button type="submit" disabled?={ row.Syncing }>Sync now</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</div>
+}
+
+templ connectionFormPage(v connFormView) {
+	@layout(v.Label, v.Chrome) {
+		<p class="back"><a href="/connections">← Connections</a></p>
+		if v.Conn == nil {
+			<h1>Add { v.Kind.Title() }</h1>
+		} else {
+			<h1>{ v.Conn.Label }</h1>
+		}
+		<p class="lead">{ v.Kind.Description() }</p>
+		if len(v.Problems) > 0 {
+			<div class="flash error" role="alert">
+				<ul>
+					for _, p := range v.Problems {
+						<li>{ p }</li>
+					}
+				</ul>
+			</div>
+		}
+		if v.Conn != nil {
+			<dl class="meta">
+				<dt>Owner</dt>
+				<dd>{ v.Conn.Owner }</dd>
+				if v.Conn.Account != "" {
+					<dt>Account</dt>
+					<dd>{ v.Conn.Account }</dd>
+				}
+				<dt>Bookmark</dt>
+				<dd>
+					if v.Conn.Cursor != "" {
+						<code>{ v.Conn.Cursor }</code>
+					} else {
+						<span class="muted">none yet: the first sync fetches everything</span>
+					}
+				</dd>
+			</dl>
+			if v.Conn.Enabled {
+				<form method="post" action={ templ.URL("/connections/" + strconv.FormatInt(v.Conn.ID, 10) + "/sync") } class="inline">
+					<input type="hidden" name="back" value="detail"/>
+					<button type="submit" class="primary" disabled?={ v.Syncing }>
+						if v.Syncing {
+							Syncing…
+						} else {
+							Sync now
+						}
+					</button>
+				</form>
+			}
+		}
+		if v.CanEdit {
+			<form method="post" class="settings" action={ formAction(v) }>
+				if v.Conn == nil {
+					<input type="hidden" name="kind" value={ v.Kind.Kind() }/>
+				}
+				<label for="label">Name</label>
+				<input id="label" name="label" type="text" value={ v.Label } required/>
+				for _, f := range v.Kind.Fields() {
+					<label for={ "field_" + f.Name }>
+						{ f.Label }
+						if f.Required {
+							<span class="muted">(required)</span>
+						}
+					</label>
+					if f.Secret {
+						<input id={ "field_" + f.Name } name={ "field_" + f.Name } type="password" autocomplete="off" spellcheck="false" placeholder={ secretPlaceholder(v, f.Placeholder) }/>
+					} else {
+						<input id={ "field_" + f.Name } name={ "field_" + f.Name } type="text" value={ v.Values[f.Name] } placeholder={ f.Placeholder } spellcheck="false"/>
+					}
+					if f.Help != "" {
+						<p class="help">{ f.Help }</p>
+					}
+				}
+				if v.Conn != nil {
+					<label class="check"><input type="checkbox" name="enabled" checked?={ v.Enabled }/> Enabled (syncs every { v.Kind.Interval().String() })</label>
+				}
+				<button type="submit" class="primary">
+					if v.Conn == nil {
+						Check and add
+					} else {
+						Save
+					}
+				</button>
+			</form>
+		}
+		if v.Conn != nil {
+			<h2>Recent syncs</h2>
+			if len(v.Runs) == 0 {
+				<p class="muted">None yet.</p>
+			} else {
+				<table class="list">
+					<thead>
+						<tr><th>Started</th><th>Trigger</th><th>Result</th><th>Commit</th></tr>
+					</thead>
+					<tbody>
+						for _, r := range v.Runs {
+							<tr>
+								<td>{ ago(r.StartedAt) }</td>
+								<td>{ r.Trigger }</td>
+								<td>
+									{ runSummary(r) }
+									if r.Error != "" {
+										<div class="sub error-text">{ r.Error }</div>
+									}
+								</td>
+								<td><code>{ shortSHA(r.Commit) }</code></td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+			if v.CanEdit {
+				<form method="post" class="danger" action={ templ.URL("/connections/" + strconv.FormatInt(v.Conn.ID, 10) + "/delete") }>
+					<label class="check"><input type="checkbox" name="confirm"/> Delete this connection. Documents it already stored stay in git.</label>
+					<button type="submit">Delete</button>
+				</form>
+			}
+		}
+	}
+}
+
+templ tokensPage(v tokensView) {
+	@layout("API tokens", v.Chrome) {
+		<h1>API tokens</h1>
+		<p class="lead">For scripts that upload transcripts (<code>POST /v1/transcripts</code> with <code>Authorization: Bearer …</code>). Uploads are attributed to you.</p>
+		if v.New != "" {
+			<div class="flash ok">
+				<p>Token “{ v.Name }” created. Copy it now; it won't be shown again.</p>
+				<div class="command">
+					<pre id="new-token">{ v.New }</pre>
+					<button type="button" data-copy="#new-token">Copy</button>
+				</div>
+			</div>
+		}
+		if v.Error != "" {
+			@flashBox(flash{"error", v.Error})
+		}
+		if len(v.Tokens) > 0 {
+			<table class="list">
+				<thead>
+					<tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, t := range v.Tokens {
+						<tr>
+							<td>{ t.Name }</td>
+							<td>{ ago(t.CreatedAt) }</td>
+							<td>{ ago(t.LastUsedAt) }</td>
+							<td class="actions">
+								<form method="post" action={ templ.URL("/tokens/" + strconv.FormatInt(t.ID, 10) + "/delete") }>
+									<button type="submit">Revoke</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<form method="post" action="/tokens" class="settings">
+			<label for="name">New token</label>
+			<input id="name" name="name" type="text" placeholder="e.g. granola import script" required/>
+			<button type="submit" class="primary">Create token</button>
+		</form>
+	}
+}

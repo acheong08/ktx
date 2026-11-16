@@ -40,7 +40,7 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	st := store.New(repo)
-	ts := httptest.NewServer(New(st, []string{"advisor"}, quiet).Handler())
+	ts := httptest.NewServer(New(Options{Store: st, Types: []string{"advisor"}, Log: quiet}).Handler())
 	t.Cleanup(ts.Close)
 	return &env{ts: ts, st: st, remote: remote, client: &http.Client{}}
 }

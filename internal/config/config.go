@@ -25,6 +25,17 @@ type Config struct {
 	MaxUploadBytes int64
 
 	Types []string // type suggestions in the web UI
+
+	StatePath     string // SQLite: users, sessions, API tokens, connections
+	MasterKeyFile string // "" = the systemd credential ktx-master-key, if any
+
+	// Sign-in through an OIDC provider (Pocket ID). Off when OIDCIssuer is "".
+	OIDCIssuer       string
+	OIDCClientID     string
+	OIDCClientSecret string
+	PublicURL        string // ktx's own URL, for the OIDC callback
+	AdminGroup       string
+	SessionTTL       time.Duration
 }
 
 // Load reads the environment and reports every missing or invalid value.
@@ -67,6 +78,32 @@ func Load() (Config, error) {
 		}
 	}
 
+	c.StatePath = env("BRAIN_STATE_DB", "./data/state.db")
+	c.MasterKeyFile = os.Getenv("BRAIN_MASTER_KEY_FILE")
+
+	c.OIDCIssuer = os.Getenv("BRAIN_OIDC_ISSUER")
+	c.OIDCClientID = os.Getenv("BRAIN_OIDC_CLIENT_ID")
+	c.OIDCClientSecret = os.Getenv("BRAIN_OIDC_CLIENT_SECRET")
+	if f := os.Getenv("BRAIN_OIDC_CLIENT_SECRET_FILE"); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("BRAIN_OIDC_CLIENT_SECRET_FILE: %w", err))
+		}
+		c.OIDCClientSecret = strings.TrimSpace(string(b))
+	}
+	c.PublicURL = strings.TrimSuffix(os.Getenv("BRAIN_PUBLIC_URL"), "/")
+	c.AdminGroup = env("BRAIN_OIDC_ADMIN_GROUP", "ktx-admins")
+	if c.SessionTTL, err = time.ParseDuration(env("BRAIN_SESSION_TTL", "24h")); err != nil || c.SessionTTL <= 0 {
+		errs = append(errs, errors.New("BRAIN_SESSION_TTL must be a positive duration like 24h"))
+	}
+	if c.OIDCIssuer != "" {
+		for name, v := range map[string]string{"BRAIN_OIDC_CLIENT_ID": c.OIDCClientID, "BRAIN_OIDC_CLIENT_SECRET": c.OIDCClientSecret, "BRAIN_PUBLIC_URL": c.PublicURL} {
+			if v == "" {
+				errs = append(errs, fmt.Errorf("%s is required when BRAIN_OIDC_ISSUER is set", name))
+			}
+		}
+	}
+
 	for _, p := range []struct{ name, path string }{
 		{"BRAIN_SSH_KEY_PATH", c.SSHKeyPath},
 		{"BRAIN_SSH_KNOWN_HOSTS", c.KnownHostsPath},
@@ -81,7 +118,8 @@ func Load() (Config, error) {
 }
 
 // ParseTokens reads "user:token,user:token". Each user name ends up in
-// commit trailers and in the uploaded_by field.
+// commit trailers and in the uploaded_by field. Empty is fine: people can
+// create their own tokens in the web UI instead.
 func ParseTokens(s string) (map[string]string, error) {
 	tokens := map[string]string{}
 	for _, pair := range strings.Split(s, ",") {
@@ -101,9 +139,6 @@ func ParseTokens(s string) (map[string]string, error) {
 			return nil, fmt.Errorf("BRAIN_API_TOKENS: token for %q is used twice", user)
 		}
 		tokens[token] = user
-	}
-	if len(tokens) == 0 {
-		return nil, errors.New(`BRAIN_API_TOKENS is required, e.g. "antonio:<token>,maxim:<token>"`)
 	}
 	return tokens, nil
 }

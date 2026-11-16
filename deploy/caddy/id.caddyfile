@@ -1,0 +1,4 @@
+# /etc/caddy/Caddyfile.d/id.caddyfile
+id.internal.melzi.dev {
+	reverse_proxy unix//run/pocket-id/pocket-id.sock
+}

@@ -6,7 +6,8 @@ The company context layer. Today that is **brain-server**, plus the Caddy build 
 
 A small Go server that owns a clone of the brain git repository.
 - **Upload:** you send a transcript over HTTP. The server checks its metadata, writes it to `transcripts/<type>/` (or `transcripts/unsorted/`), commits, and pushes to GitHub.
-- **Web UI:** you can read, search and sort transcripts in a browser. It has no login, so keep it on a private network (on the server it is only reachable over the tailnet).
+- **Web UI:** you can read, search and sort transcripts in a browser. People sign in through Pocket ID (passkeys).
+- **Connectors:** ktx pulls meeting notes from Granola on a schedule into `meetings/`. Each person adds their own credential in the UI; it's stored encrypted.
 
 ```
 API client ──POST /v1/transcripts──┐
@@ -108,16 +109,44 @@ No auth. Returns `{"ok":true}`.
 - **Type suggestions:** `BRAIN_TRANSCRIPT_TYPES` plus every folder that already exists. Any new name matching `[a-z0-9_-]` creates a folder.
 - **Built with** [templ](https://templ.guide) components and [htmx 4](https://four.htmx.org). htmx is vendored in `internal/web/static`, so the page loads nothing from a CDN.
 
-### No login
+### Sign-in
 
-The UI has no authentication. Anyone who can reach it can read and re-sort transcripts. That's fine while it is only reachable over the tailnet, behind Caddy. Don't expose brain-server's port anywhere else. A central SSO can be put in front of it later; Caddy is the natural place for that.
+With `BRAIN_OIDC_ISSUER` set, every page needs sign-in through the identity provider. On the server that's [Pocket ID](https://pocket-id.org) at `id.internal.melzi.dev` (passkeys, OIDC).
+- **Flow:** authorization code with PKCE. A short-lived cookie ties the callback to the browser that started the login.
+- **Sessions** live in `state.db`, so a restart doesn't sign anyone out. They last `BRAIN_SESSION_TTL` (24h by default). Removing someone in Pocket ID takes effect at their next sign-in.
+- **Admins** are members of the `ktx-admins` group in Pocket ID. That is re-read at every sign-in.
+- **Commit attribution:** commits from the UI carry `Changed-By: <username>`.
+- **What else protects the UI:** cross-origin form posts are refused, and a strict Content-Security-Policy applies (`script-src 'self'`, no inline scripts or eval). Because of that CSP, htmx features that evaluate JavaScript (`hx-on`, `js:` values, trigger filters) won't work. Put such behaviour in `static/app.js`.
+- **Without `BRAIN_OIDC_ISSUER`** the UI is open to anyone who can reach it, and the Connections and API tokens pages are hidden. Only acceptable on a private network.
 
-What it keeps:
-- **Cross-origin protection.** Form posts from other origins are refused (Go's `http.CrossOriginProtection`), so a website you visit can't make your browser change things here.
-- **A strict Content-Security-Policy** (`script-src 'self'`, no inline or eval). Because of that, htmx features that evaluate JavaScript (`hx-on`, `js:` values, trigger filters like `keyup[key=='Enter']`) won't work. Put such behavior in `static/app.js`.
-- **Some attribution.** Commits made from the UI record the client's address, as forwarded by Caddy: `Changed-By: web UI (100.64.0.3)`.
+### API tokens
 
-The SSH-signature login that used to be here is in git history (`internal/web/auth.go`, `internal/sshsig`) if it's ever useful again.
+The **API tokens** page lets each person create tokens for scripts (`POST /v1/transcripts`). A token is shown once, stored only as a hash, and uploads made with it are attributed to its owner. `BRAIN_API_TOKENS` still works for fixed tokens.
+
+## Connectors
+
+A connection is a service ktx pulls from, with one person's credential. You add them on the **Connections** page; the owner or an admin can change or delete them.
+
+- **Granola** (Business plan API key) → `meetings/<date>-<time>-<title>-<id>.md`.
+  - **Front matter:** title, date (calendar time, in the connection's time zone), participants, `source: granola`, `source_id` (the note ID), `granola_url`, `calendar_event_id`, folders.
+  - **Body:** summary, the owner's own notes, transcript.
+  - **What gets fetched:** only notes Granola has finished (with a summary).
+  - **Edits:** a note edited later overwrites its file; git keeps the history.
+  - **Schedule:** every 10 minutes, plus **Sync now**.
+
+How a run works ([internal/connectors](internal/connectors/connectors.go)):
+1. **Fetch:** the connector fetches everything changed since the connection's bookmark.
+2. **Commit:** ktx writes it as **one commit per run** (in batches of 50), with `Connection:` and `Uploaded-By: <owner>` trailers.
+3. **Bookmark:** saved only after that commit exists. A failed run keeps what it fetched, and the next run starts from the same place. Re-fetching is harmless because documents are overwritten by id and unchanged ones aren't committed.
+4. **History:** each connection's page shows its last runs and any error.
+
+**Credentials are encrypted at rest** ([internal/secrets](internal/secrets/secrets.go)), with AES-256-GCM and each one bound to its connection.
+- **The master key** is a systemd encrypted credential (`LoadCredentialEncrypted=ktx-master-key`), decrypted at start with the host key. No password is needed at restart.
+- **What that protects against:** a copied `state.db` is useless.
+- **What it doesn't:** root on the server, which can read everything.
+- **In the UI** a credential is write-only: you see its last four characters, and can replace or delete it.
+
+**Adding a connector:** implement [`connectors.Connector`](internal/connectors/connectors.go) (fields, `Check`, `Sync`) and register it in `cmd/brain-server/main.go`. [granola](internal/connectors/granola/granola.go) is the example.
 
 ### Editing templates
 
@@ -130,7 +159,14 @@ go tool templ generate -path internal/web   # after changing views.templ; commit
 | Variable | Default | |
 |---|---|---|
 | `BRAIN_REPO_URL` | required | e.g. `git@github.com:org/brain.git` |
-| `BRAIN_API_TOKENS` | required | `antonio:<token>,maxim:<token>`; tokens at least 24 chars (`openssl rand -hex 32`). The name goes into `uploaded_by` and the commit's `Uploaded-By:` trailer. |
+| `BRAIN_API_TOKENS` | | Optional fixed tokens, `antonio:<token>,maxim:<token>`; at least 24 chars (`openssl rand -hex 32`). The name goes into `uploaded_by` and the commit's `Uploaded-By:` trailer. People can also create their own tokens in the UI. |
+| `BRAIN_STATE_DB` | `./data/state.db` | SQLite: users, sessions, API tokens, connections, run history |
+| `BRAIN_MASTER_KEY_FILE` | | 32-byte key (raw or base64) that seals connector credentials. Without it, the systemd credential `ktx-master-key` is used; without either, connectors are off. |
+| `BRAIN_OIDC_ISSUER` | | Identity provider URL, e.g. `https://id.internal.melzi.dev`. Turns on sign-in. |
+| `BRAIN_OIDC_CLIENT_ID`, `BRAIN_OIDC_CLIENT_SECRET` (or `_FILE`) | | ktx's client at the identity provider |
+| `BRAIN_PUBLIC_URL` | | ktx's own URL; the callback is `<url>/auth/callback` |
+| `BRAIN_OIDC_ADMIN_GROUP` | `ktx-admins` | Members are ktx admins |
+| `BRAIN_SESSION_TTL` | `24h` | How long a sign-in lasts |
 | `BRAIN_SSH_KEY_PATH` | | Deploy key (private key file) |
 | `BRAIN_SSH_KNOWN_HOSTS` | | Pinned `known_hosts`. Without it, the host key is trusted on first use. |
 | `BRAIN_BRANCH` | `main` | |
@@ -167,7 +203,9 @@ docker run -p 8080:8080 -v brain-data:/data \
 
 ssh refuses private keys that other users can read, so mount the key with owner-only permissions (`chmod 600`) and readable by uid 10001.
 
-Serve it over HTTPS (a reverse proxy, or a platform that terminates TLS), on a private network only. The UI has no login, and API tokens travel in headers. The proxy must keep the `Host` header (cross-origin protection compares it with `Origin`) and should set `X-Forwarded-For`, which is used for attribution.
+Serve it over HTTPS (a reverse proxy, or a platform that terminates TLS). The proxy must:
+- keep the `Host` header, because cross-origin protection compares it with `Origin`;
+- set `X-Forwarded-Proto: https`, which marks the session cookie `Secure`.
 
 ## How git is handled
 
@@ -191,7 +229,9 @@ box (tailnet only)                            ▼
   ktx-update.timer (every minute) ── installs /opt/ktx/releases/<tag>, restarts, rolls back if unhealthy
   caddy        ── 100.64.0.14:443, *.internal.melzi.dev cert via Cloudflare DNS challenge
      └ internal_dns ── publishes an A record → tailnet IP for every site under internal.melzi.dev
-  brain-server ── 127.0.0.1:8080, clones/pushes melzi-cloud/company-brain
+  brain-server ── 127.0.0.1:8080: UI, API, connectors (Granola → meetings/); clones/pushes melzi-cloud/company-brain
+     └ state.db ── users, sessions, API tokens, connections (credentials sealed with the master key)
+  pocket-id    ── Podman, no network, Unix socket ← caddy (id.internal.melzi.dev); ktx signs people in here
 ```
 
 | Path | What |
@@ -201,9 +241,39 @@ box (tailnet only)                            ▼
 | `/etc/caddy/caddy.env` | `CLOUDFLARE_API_TOKEN` (Zone:Read + DNS:Edit on melzi.dev). Caddy stays stopped until it is set and starts by itself once it is saved. |
 | `/etc/ktx/brain-server.env` | brain-server settings; API tokens are generated here at install |
 | `/etc/ktx/company-brain.key` | Deploy key (write) for the data repo |
+| `/var/lib/ktx/state.db` | Users, sessions, API tokens, connections (credentials sealed) |
+| `/etc/credstore.encrypted/ktx-master-key` | Master key, encrypted with the host key (`/var/lib/systemd/credential.secret`) |
+| `/etc/ktx/oidc-client-secret` | ktx's client secret at Pocket ID |
+| `/etc/containers/systemd/pocket-id.container` | Pocket ID, as a Podman Quadlet |
+| `/var/lib/pocket-id` | Pocket ID's database (users, passkeys, clients). Backed up daily to `/var/backups/pocket-id` |
+| `/etc/pocket-id/secrets/` | Pocket ID's encryption key and admin API key |
 | `/opt/ktx/current` → `releases/<tag>` | Running binaries |
 | `/usr/local/libexec/ktx-update` | Release installer (from `deploy/ktx-update/`) |
 | `/usr/local/libexec/ktx-ssh-guard` | Closes public SSH while Tailscale is healthy (from `deploy/ssh-guard/`) |
+
+**Pocket ID** (identity for ktx and later apps) runs in Podman ([pocket-id.container](deploy/pocket-id/pocket-id.container)).
+- **Isolation:**
+  - **No network at all:** Caddy reaches it through a Unix socket in `/run/pocket-id`, whose directory only Caddy can enter. It can't make outbound connections or reach anything else on the box.
+  - **Non-root user** (`pocketid`), read-only image, all capabilities dropped.
+- **Updates:** `podman-auto-update.timer` follows the `v2-distroless` tag daily and rolls back if the new image doesn't start. v3 has to be adopted on purpose.
+- **Backups:** daily, of the database and its encryption key, to `/var/backups/pocket-id` (14 kept). This is the one piece of state that can't be rebuilt.
+- **Setup and invites:** [pocket-id-provision](deploy/pocket-id/pocket-id-provision) (run by `install.sh`) creates the groups `melzi` (may use ktx) and `ktx-admins`, plus the `ktx` OIDC client and its secret. To add a person:
+  ```sh
+  pocket-id-provision invite maxim maxim@example.com          # member
+  pocket-id-provision invite antonio ac@melzi.dev --admin     # also ktx admin
+  ```
+  It prints a one-time link (24h). They open it and add a passkey. People can also be managed in Pocket ID's own admin UI.
+
+**Sandboxing.** Every service runs under systemd's sandbox options. Exposure scores from `systemd-analyze security` (0 is fully locked down, 10 is no sandbox):
+
+| Service | Runs as | Score | Allowed |
+|---|---|---|---|
+| brain-server | `ktx` | 1.3 | Writes `/var/lib/ktx` only; outbound network; runs git/ssh; no capabilities; syscall filter |
+| caddy | `caddy` | 1.8 | Writes `/var/lib/caddy` only; binds 80/443; reads the tailnet address over netlink |
+| pocket-id | `pocketid` in Podman | n/a | No network, read-only image |
+| ktx-update, ktx-ssh-guard, pocket-id-backup | root, short jobs | ~3.5 | Confined to the files they manage. The guard fails open: if its sandbox ever breaks it, SSH stays reachable. |
+
+SELinux is still in permissive mode. Turning it on would also confine the Pocket ID container, but check a few days of `ausearch -m avc` output first.
 
 **Adding an internal site** means dropping in a file like this:
 
@@ -251,3 +321,5 @@ What `internal_dns` touches, and what it doesn't:
 go test ./...                   # uses the local git binary and temporary bare repositories
 (cd caddy && go test ./...)     # Caddy build and internal_dns (separate Go module, to keep Caddy's dependencies out of brain-server)
 ```
+
+The web tests include a fake OIDC provider (discovery, signed ID tokens, PKCE checks), so the sign-in flow is tested without Pocket ID. The Granola tests use a fake API built from Granola's reference.

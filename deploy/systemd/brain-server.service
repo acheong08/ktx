@@ -8,15 +8,42 @@ StartLimitIntervalSec=0
 User=ktx
 Group=ktx
 EnvironmentFile=/etc/ktx/brain-server.env
+# Master key for sealed connector credentials, decrypted by systemd at start
+# (host key; no password needed). The service sees it in $CREDENTIALS_DIRECTORY.
+LoadCredentialEncrypted=ktx-master-key:/etc/credstore.encrypted/ktx-master-key
 ExecStart=/opt/ktx/current/brain-server
 Restart=on-failure
 RestartSec=5s
 StateDirectory=ktx
+UMask=0077
+
+# Sandbox. It needs: its state directory, outbound HTTPS/SSH (git, APIs),
+# and to run git and ssh. Nothing else.
 NoNewPrivileges=true
+CapabilityBoundingSet=
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/ktx
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

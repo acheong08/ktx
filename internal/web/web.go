@@ -1,9 +1,10 @@
 // Package web serves the browser UI for reading and sorting transcripts.
 // Pages are templ components; interactions use htmx 4.
 //
-// There is no login: the UI is meant to be reachable only on a private
-// network (the tailnet, behind Caddy). Cross-origin form posts are still
-// refused, so other websites can't drive the UI through a visitor's browser.
+// Sign-in is through the identity provider (Pocket ID, over OIDC) when one is
+// configured; without one the UI is open to whoever can reach it, which is
+// only acceptable on a private network. Cross-origin form posts are refused
+// either way, so other websites can't drive the UI through a visitor's browser.
 package web
 
 //go:generate go tool templ generate
@@ -32,6 +33,8 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/renderer/html"
 
+	"github.com/acheong08/ktx/internal/connectors"
+	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
 	"github.com/acheong08/ktx/internal/transcript"
 )
@@ -42,7 +45,10 @@ var staticFS embed.FS
 // UI is the web interface.
 type UI struct {
 	store  *store.Store
-	types  []string // suggested types, merged with the folders that exist
+	db     *state.DB           // nil: no sign-in, connections or API tokens
+	auth   *Auth               // nil: no sign-in
+	conns  *connectors.Manager // nil: no connections page
+	types  []string            // suggested types, merged with the folders that exist
 	log    *slog.Logger
 	assets assets
 	md     goldmark.Markdown
@@ -50,10 +56,20 @@ type UI struct {
 
 type assets struct{ CSS, JS, HTMX string }
 
-// New builds the UI. types are suggestions offered when sorting.
-func New(st *store.Store, types []string, log *slog.Logger) *UI {
+// Options configure the UI. Only Store and Log are required.
+type Options struct {
+	Store      *store.Store
+	Types      []string // type suggestions when sorting
+	Log        *slog.Logger
+	DB         *state.DB
+	Auth       *Auth
+	Connectors *connectors.Manager
+}
+
+// New builds the UI.
+func New(o Options) *UI {
 	return &UI{
-		store: st, types: types, log: log,
+		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, types: o.Types, log: o.Log,
 		assets: assets{
 			CSS:  assetURL("style.css"),
 			JS:   assetURL("app.js"),
@@ -86,10 +102,32 @@ func (u *UI) Handler() http.Handler {
 		files.ServeHTTP(w, r)
 	})))
 
-	mux.HandleFunc("GET /{$}", u.list)
-	mux.HandleFunc("GET /sort", u.sortNext)
-	mux.HandleFunc("GET /transcripts/{id}", u.detail)
-	mux.HandleFunc("POST /transcripts/{id}/type", u.setType)
+	if u.auth != nil {
+		mux.HandleFunc("GET /auth/login", u.auth.login)
+		mux.HandleFunc("GET /auth/callback", u.callback)
+		mux.HandleFunc("POST /auth/logout", u.logout)
+		mux.HandleFunc("GET /auth/signed-out", u.signedOut)
+	}
+
+	mux.HandleFunc("GET /{$}", u.page(u.list))
+	mux.HandleFunc("GET /sort", u.page(u.sortNext))
+	mux.HandleFunc("GET /transcripts/{id}", u.page(u.detail))
+	mux.HandleFunc("POST /transcripts/{id}/type", u.page(u.setType))
+
+	if u.auth != nil && u.db != nil {
+		mux.HandleFunc("GET /tokens", u.page(u.tokens))
+		mux.HandleFunc("POST /tokens", u.page(u.createToken))
+		mux.HandleFunc("POST /tokens/{id}/delete", u.page(u.deleteToken))
+	}
+	if u.auth != nil && u.conns != nil {
+		mux.HandleFunc("GET /connections", u.page(u.connections))
+		mux.HandleFunc("GET /connections/new", u.page(u.newConnection))
+		mux.HandleFunc("POST /connections", u.page(u.createConnection))
+		mux.HandleFunc("GET /connections/{id}", u.page(u.connection))
+		mux.HandleFunc("POST /connections/{id}", u.page(u.updateConnection))
+		mux.HandleFunc("POST /connections/{id}/sync", u.page(u.syncConnection))
+		mux.HandleFunc("POST /connections/{id}/delete", u.page(u.deleteConnection))
+	}
 
 	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))
 }
@@ -104,9 +142,88 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// actor describes who made a change, for commit trailers. Without a login
-// it's the client's address: Caddy passes the tailnet IP in X-Forwarded-For.
+type ctxUser struct{}
+
+// page requires a signed-in user when sign-in is configured, and puts the
+// user in the request context.
+func (u *UI) page(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if u.auth == nil {
+			next(w, r)
+			return
+		}
+		user, ok := u.auth.user(r)
+		if !ok {
+			to := "/auth/login?next=" + url.QueryEscape(r.URL.RequestURI())
+			if r.Method != http.MethodGet {
+				to = "/auth/login"
+			}
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("HX-Redirect", to)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			http.Redirect(w, r, to, http.StatusSeeOther)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxUser{}, user)))
+	}
+}
+
+// currentUser is the signed-in user (ok is false when sign-in is off).
+func currentUser(r *http.Request) (state.User, bool) {
+	user, ok := r.Context().Value(ctxUser{}).(state.User)
+	return user, ok
+}
+
+// chrome is what every page's header needs.
+type chrome struct {
+	Assets      assets
+	User        string
+	IsAdmin     bool
+	SignIn      bool
+	Connections bool
+	Tokens      bool
+	Nav         string // active section
+}
+
+func (u *UI) chrome(r *http.Request, nav string) chrome {
+	c := chrome{Assets: u.assets, SignIn: u.auth != nil, Nav: nav}
+	if user, ok := currentUser(r); ok {
+		c.User, c.IsAdmin = user.Display(), user.IsAdmin
+		c.Connections = u.conns != nil
+		c.Tokens = u.db != nil
+	}
+	return c
+}
+
+func (u *UI) callback(w http.ResponseWriter, r *http.Request) {
+	user, next, err := u.auth.callback(w, r)
+	if err != nil {
+		u.log.Warn("sign-in failed", "err", err, "remote", r.RemoteAddr)
+		u.render(w, r, http.StatusUnauthorized, signInFailed(u.chrome(r, ""), err.Error()))
+		return
+	}
+	u.log.Info("signed in", "user", user.Display(), "admin", user.IsAdmin)
+	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+func (u *UI) logout(w http.ResponseWriter, r *http.Request) {
+	u.auth.logout(w, r)
+	http.Redirect(w, r, "/auth/signed-out", http.StatusSeeOther)
+}
+
+func (u *UI) signedOut(w http.ResponseWriter, r *http.Request) {
+	u.render(w, r, http.StatusOK, signedOutPage(u.chrome(r, "")))
+}
+
+// actor describes who made a change, for commit trailers: the signed-in
+// user, or without sign-in the client's address (Caddy passes the tailnet
+// IP in X-Forwarded-For).
 func actor(r *http.Request) string {
+	if user, ok := currentUser(r); ok {
+		return user.Display()
+	}
 	ip := r.RemoteAddr
 	if host, _, err := net.SplitHostPort(ip); err == nil {
 		ip = host
@@ -131,7 +248,7 @@ type tab struct {
 }
 
 type listView struct {
-	Assets        assets
+	Chrome        chrome
 	Q, Sort       string
 	Folder        string // "" = all
 	Tabs          []tab
@@ -146,7 +263,7 @@ type option struct{ Value, Label string }
 var sortOptions = []option{{"newest", "Newest first"}, {"oldest", "Oldest first"}, {"title", "Title A–Z"}}
 
 func (u *UI) list(w http.ResponseWriter, r *http.Request) {
-	v, err := u.listView(r.URL.Query().Get("q"), r.URL.Query().Get("folder"), r.URL.Query().Get("sort"))
+	v, err := u.listView(r, r.URL.Query().Get("q"), r.URL.Query().Get("folder"), r.URL.Query().Get("sort"))
 	if err != nil {
 		u.fail(w, r, err)
 		return
@@ -159,7 +276,7 @@ func (u *UI) list(w http.ResponseWriter, r *http.Request) {
 	u.render(w, r, http.StatusOK, listPage(v))
 }
 
-func (u *UI) listView(q, folder, sortBy string) (listView, error) {
+func (u *UI) listView(r *http.Request, q, folder, sortBy string) (listView, error) {
 	entries, err := u.store.List()
 	if err != nil {
 		return listView{}, err
@@ -167,7 +284,7 @@ func (u *UI) listView(q, folder, sortBy string) (listView, error) {
 	if !slices.ContainsFunc(sortOptions, func(o option) bool { return o.Value == sortBy }) {
 		sortBy = "newest"
 	}
-	v := listView{Assets: u.assets, Q: q, Sort: sortBy, Folder: folder, Types: u.typeOptions(entries)}
+	v := listView{Chrome: u.chrome(r, "transcripts"), Q: q, Sort: sortBy, Folder: folder, Types: u.typeOptions(entries)}
 
 	counts := map[string]int{}
 	var matching []store.Entry
@@ -254,7 +371,7 @@ func isPartial(r *http.Request) bool {
 // --- detail ----------------------------------------------------------------
 
 type detailView struct {
-	Assets    assets
+	Chrome    chrome
 	Entry     store.Entry
 	BodyHTML  string
 	Types     []string
@@ -288,7 +405,7 @@ func (u *UI) renderDetail(w http.ResponseWriter, r *http.Request, status int, id
 		return
 	}
 	u.render(w, r, status, detailPage(detailView{
-		Assets: u.assets, Entry: e, BodyHTML: body.String(), Types: u.typeOptions(entries),
+		Chrome: u.chrome(r, "transcripts"), Entry: e, BodyHTML: body.String(), Types: u.typeOptions(entries),
 		BackURL: listURL("", e.Folder, ""), BackLabel: e.Folder, Flash: fl,
 	}))
 }
@@ -323,7 +440,7 @@ func (u *UI) setType(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isPartial(r) { // from the list: re-render it with the current filters
-		v, lerr := u.listView(r.PostFormValue("q"), r.PostFormValue("folder"), r.PostFormValue("sort"))
+		v, lerr := u.listView(r, r.PostFormValue("q"), r.PostFormValue("folder"), r.PostFormValue("sort"))
 		if lerr != nil {
 			u.fail(w, r, lerr)
 			return
@@ -382,10 +499,15 @@ func (u *UI) render(w http.ResponseWriter, r *http.Request, status int, c templ.
 	_, _ = w.Write(buf.Bytes())
 }
 
+// errNotFound is a generic "no such thing" for pages.
+var errNotFound = errors.New("not found")
+
 func (u *UI) fail(w http.ResponseWriter, r *http.Request, err error) {
 	status, msg := http.StatusInternalServerError, "Something went wrong. The details are in the server log."
 	if errors.Is(err, store.ErrNotFound) {
 		status, msg = http.StatusNotFound, "No transcript with that id. It may have been removed."
+	} else if errors.Is(err, errNotFound) {
+		status, msg = http.StatusNotFound, "Not found."
 	} else {
 		u.log.Error("ui", "path", r.URL.Path, "err", err)
 	}
@@ -393,7 +515,7 @@ func (u *UI) fail(w http.ResponseWriter, r *http.Request, err error) {
 		u.render(w, r, status, flashBox(flash{"error", msg}))
 		return
 	}
-	u.render(w, r, status, errorPage(u.assets, msg))
+	u.render(w, r, status, errorPage(u.chrome(r, ""), msg))
 }
 
 // --- view helpers used by the templates --------------------------------------
