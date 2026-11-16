@@ -1,10 +1,10 @@
-// Package store reads and writes documents in the git working copy.
+// Package store reads and writes transcripts in the git working copy.
 //
-//	transcripts/<type>/...-<id>.md   uploaded transcripts; the folder is the type, or "unsorted"
-//	meetings/...-<id>.md             meeting notes from connectors such as Granola
+//	transcripts/<type>/...-<id>.md   the folder is the type, or "unsorted"
 //
-// File names end in the document id, so a document is found again wherever
-// it has been moved within its collection.
+// Connectors file their documents under a default type (Granola notes go to
+// transcripts/meetings/). File names end in the document id, so a transcript
+// is found again wherever it has been moved under transcripts/.
 package store
 
 import (
@@ -17,7 +17,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -26,26 +25,17 @@ import (
 	"github.com/acheong08/ktx/internal/transcript"
 )
 
-// Collections are the top-level folders the store manages.
 const (
-	// Transcripts are sorted into transcripts/<type>/ (or unsorted).
-	Transcripts = "transcripts"
-	// Meetings are notes from meeting tools such as Granola, in meetings/.
-	Meetings = "meetings"
-	// Root is the transcripts collection (kept for existing callers).
-	Root = Transcripts
+	// Root holds every transcript, sorted or not.
+	Root = "transcripts"
+	// Transcripts is Root, kept for callers that name it.
+	Transcripts = Root
 	// UnsortedDir is where transcripts without a type live.
-	UnsortedDir = Transcripts + "/" + transcript.Unsorted
+	UnsortedDir = Root + "/" + transcript.Unsorted
 )
-
-// Collections lists every collection, in display order.
-var Collections = []string{Transcripts, Meetings}
 
 // ErrNotFound means no document has the requested id.
 var ErrNotFound = errors.New("transcript not found")
-
-// ErrNotSortable means the document isn't a transcript, so it has no type folder.
-var ErrNotSortable = errors.New("only transcripts are sorted by type; meetings stay in meetings/")
 
 // Repo is the part of gitrepo.Repo the store needs.
 type Repo interface {
@@ -67,12 +57,11 @@ func (s *Store) SetClock(now func() time.Time) { s.now = now }
 
 // Entry is one stored transcript, as read from its file.
 type Entry struct {
-	ID         string // from the file name suffix; "" for hand-added files without one
-	Path       string // relative to the repo root, slash-separated
-	Collection string // Transcripts or Meetings
-	Folder     string // a transcript's type folder (first directory under transcripts/), else the collection
-	Meta       transcript.Meta
-	Start      time.Time // zero if the date can't be read
+	ID     string // from the file name suffix; "" for hand-added files without one
+	Path   string // relative to the repo root, slash-separated
+	Folder string // the type folder: first directory under transcripts/
+	Meta   transcript.Meta
+	Start  time.Time // zero if the date can't be read
 	// IngestedAt and UploadedBy are the server-managed keys, as stored.
 	IngestedAt, UploadedBy string
 	Problems               []string // why the file doesn't meet the upload rules, if it doesn't
@@ -136,10 +125,12 @@ const (
 	ResultUnchanged = "unchanged"
 )
 
-// Item is one document to store and the collection it belongs in.
+// Item is one document to store.
 type Item struct {
-	Doc        *transcript.Doc
-	Collection string // Transcripts or Meetings
+	Doc *transcript.Doc
+	// DefaultType files a new document whose metadata has no type. It is
+	// ignored for documents already stored, so ones sorted by hand stay put.
+	DefaultType string
 }
 
 // Put stores an uploaded transcript, overwriting one with the same id.
@@ -148,7 +139,7 @@ type Item struct {
 // keeps the folder the file is already in (so files sorted by hand stay
 // sorted) and sets the type key to match it.
 func (s *Store) Put(ctx context.Context, doc *transcript.Doc, user string) (PutResult, error) {
-	res, git, err := s.PutBatch(ctx, []Item{{Doc: doc, Collection: Transcripts}}, user, "")
+	res, git, err := s.PutBatch(ctx, []Item{{Doc: doc}}, user, "")
 	var out PutResult
 	if len(res) == 1 {
 		out = res[0]
@@ -162,8 +153,8 @@ func (s *Store) Put(ctx context.Context, doc *transcript.Doc, user string) (PutR
 // change (e.g. "Sync granola"); extra trailers are added to it.
 func (s *Store) PutBatch(ctx context.Context, items []Item, user, summary string, trailers ...string) ([]PutResult, gitrepo.Result, error) {
 	for _, it := range items {
-		if !slices.Contains(Collections, it.Collection) {
-			return nil, gitrepo.Result{}, fmt.Errorf("unknown collection %q", it.Collection)
+		if _, err := transcript.NormalizeType(it.DefaultType); err != nil {
+			return nil, gitrepo.Result{}, err
 		}
 	}
 	results := make([]PutResult, len(items))
@@ -189,11 +180,10 @@ func (s *Store) PutBatch(ctx context.Context, items []Item, user, summary string
 		if len(changed) == 1 {
 			it, res := items[changed[0]], results[changed[0]]
 			verb := map[string]string{ResultCreated: "Add", ResultUpdated: "Update"}[res.Result]
-			noun := map[string]string{Transcripts: "transcript", Meetings: "meeting"}[it.Collection]
 			if it.Doc.Meta.Source != "" {
 				tr = append(tr, "Source: "+it.Doc.Meta.Source)
 			}
-			ch.Message = commitMessage(verb+" "+noun, it.Doc.Label(), it.Doc.Start, it.Doc.ID, tr...)
+			ch.Message = commitMessage(verb+" transcript", it.Doc.Label(), it.Doc.Start, it.Doc.ID, tr...)
 			return ch, nil
 		}
 
@@ -228,10 +218,10 @@ func (s *Store) putOne(root string, it Item, user string) (PutResult, []string, 
 
 	ingestedAt := s.now().UTC().Format(time.RFC3339)
 	var old []byte
-	dir := Meetings
-	if it.Collection == Transcripts {
-		dir = folderDir(doc.Meta.Type)
+	if existing == "" && doc.Meta.Type == "" {
+		doc.Meta.Type, _ = transcript.NormalizeType(it.DefaultType)
 	}
+	dir := folderDir(doc.Meta.Type)
 	if existing != "" {
 		if old, err = os.ReadFile(filepath.Join(root, filepath.FromSlash(existing))); err != nil {
 			return out, nil, err
@@ -239,7 +229,7 @@ func (s *Store) putOne(root string, it Item, user string) (PutResult, []string, 
 		if v := transcript.ReadField(old, "ingested_at"); v != "" {
 			ingestedAt = v // first ingestion time; git history has the rest
 		}
-		if it.Collection == Transcripts && doc.Meta.Type == "" && collectionOf(existing) == Transcripts {
+		if doc.Meta.Type == "" {
 			dir = path.Dir(existing)
 			if f := folderOf(existing); f != transcript.Unsorted {
 				doc.Meta.Type = f
@@ -247,12 +237,10 @@ func (s *Store) putOne(root string, it Item, user string) (PutResult, []string, 
 		}
 	}
 
-	if it.Collection == Transcripts {
-		if doc.Meta.Type != "" {
-			doc.Set("type", doc.Meta.Type)
-		} else {
-			doc.Unset("type")
-		}
+	if doc.Meta.Type != "" {
+		doc.Set("type", doc.Meta.Type)
+	} else {
+		doc.Unset("type")
 	}
 	doc.Set("id", doc.ID)
 	doc.Set("ingested_at", ingestedAt)
@@ -305,9 +293,6 @@ func (s *Store) SetType(ctx context.Context, id, typ, user string) (PutResult, e
 		if existing == "" {
 			return gitrepo.Change{}, ErrNotFound
 		}
-		if collectionOf(existing) != Transcripts {
-			return gitrepo.Change{}, ErrNotSortable
-		}
 		old, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(existing)))
 		if err != nil {
 			return gitrepo.Change{}, err
@@ -356,7 +341,7 @@ func (s *Store) SetType(ctx context.Context, id, typ, user string) (PutResult, e
 	return out, err
 }
 
-// List reads every document in every collection, newest first.
+// List reads every transcript, newest first.
 func (s *Store) List() ([]Entry, error) {
 	var entries []Entry
 	err := s.repo.View(func(root string) error {
@@ -397,7 +382,7 @@ func readEntry(root, rel string) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	e := Entry{Path: rel, Collection: collectionOf(rel), Folder: folderOf(rel)}
+	e := Entry{Path: rel, Folder: folderOf(rel)}
 	if m := idSuffix.FindStringSubmatch(rel); m != nil {
 		e.ID = m[1]
 	}
@@ -428,38 +413,33 @@ func readEntry(root, rel string) (Entry, error) {
 // errStop ends a walk early.
 var errStop = errors.New("stop")
 
-// walk calls fn for every .md file in every collection. fn may return
-// errStop to end the walk.
+// walk calls fn for every .md file under Root. fn may return errStop to end
+// the walk.
 func walk(root string, fn func(rel string) error) error {
-	for _, c := range Collections {
-		err := filepath.WalkDir(filepath.Join(root, c), func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					return fs.SkipAll
-				}
-				return err
+	err := filepath.WalkDir(filepath.Join(root, Root), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return fs.SkipAll
 			}
-			if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
-				return nil
-			}
-			rel, err := filepath.Rel(root, p)
-			if err != nil {
-				return err
-			}
-			return fn(filepath.ToSlash(rel))
-		})
-		if errors.Is(err, errStop) {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
+		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
 		}
+		return fn(filepath.ToSlash(rel))
+	})
+	if errors.Is(err, errStop) {
+		return nil
 	}
-	return nil
+	return err
 }
 
-// findByID returns the path of the document whose file name ends in
-// -<id>.md, in any collection, or "".
+// findByID returns the path of the transcript whose file name ends in
+// -<id>.md, anywhere under Root, or "".
 func findByID(root, id string) (string, error) {
 	suffix := "-" + id + ".md"
 	var found string
@@ -480,19 +460,9 @@ func folderDir(typ string) string {
 	return path.Join(Root, typ)
 }
 
-// collectionOf is the top-level folder of rel.
-func collectionOf(rel string) string {
-	c, _, _ := strings.Cut(rel, "/")
-	return c
-}
-
-// folderOf is the folder shown for rel: a transcript's type folder (the
-// first directory under transcripts/), or the collection name otherwise.
+// folderOf is the first directory under Root in rel.
 func folderOf(rel string) string {
-	if collectionOf(rel) != Transcripts {
-		return collectionOf(rel)
-	}
-	rest := strings.TrimPrefix(rel, Transcripts+"/")
+	rest := strings.TrimPrefix(rel, Root+"/")
 	if dir, _, ok := strings.Cut(rest, "/"); ok {
 		return dir
 	}

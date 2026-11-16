@@ -137,9 +137,7 @@ templ results(v listView) {
 						</td>
 						<td class="people">{ participantSummary(e) }</td>
 						<td class="type">
-							if e.Collection == "meetings" {
-								<span class="muted">meeting</span>
-							} else if e.ID != "" {
+							if e.ID != "" {
 								<input type="text" name="type" list="type-options" value={ typeValue(e) } placeholder="unsorted" aria-label={ "Type of " + e.Label() } autocomplete="off" hx-post={ "/transcripts/" + e.ID + "/type" } data-enter-commits hx-trigger="change" hx-sync="this:drop" hx-target="#results" hx-include=".filter-field"/>
 							} else {
 								{ e.Folder }
@@ -168,7 +166,7 @@ templ detailPage(v detailView) {
 					</ul>
 				</div>
 			}
-			if v.Entry.ID != "" && v.Entry.Collection != "meetings" {
+			if v.Entry.ID != "" {
 				<form class="retype" method="post" action={ templ.URL("/transcripts/" + v.Entry.ID + "/type") }>
 					<label for="type">Type</label>
 					<input id="type" type="text" name="type" list="type-options" value={ typeValue(v.Entry) } placeholder="unsorted" autocomplete="off"/>

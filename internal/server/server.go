@@ -38,8 +38,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
-	mux.HandleFunc("POST /v1/transcripts", s.auth(s.upload(store.Transcripts)))
-	mux.HandleFunc("POST /v1/meetings", s.auth(s.upload(store.Meetings)))
+	mux.HandleFunc("POST /v1/transcripts", s.auth(s.createTranscript))
 }
 
 type ctxUser struct{}
@@ -66,7 +65,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// TranscriptResponse is returned by POST /v1/transcripts and /v1/meetings.
+// TranscriptResponse is returned by POST /v1/transcripts.
 type TranscriptResponse struct {
 	ID           string `json:"id"`
 	Path         string `json:"path"`
@@ -77,13 +76,7 @@ type TranscriptResponse struct {
 	PushError    string `json:"push_error,omitempty"`
 }
 
-// upload stores a Markdown document in a collection: transcripts are
-// filed by type, meetings go to meetings/.
-func (s *Server) upload(collection string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { s.createDocument(w, r, collection) }
-}
-
-func (s *Server) createDocument(w http.ResponseWriter, r *http.Request, collection string) {
+func (s *Server) createTranscript(w http.ResponseWriter, r *http.Request) {
 	user, _ := r.Context().Value(ctxUser{}).(string)
 
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxBytes))
@@ -111,16 +104,7 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request, collecti
 	// Don't let a client disconnect interrupt git halfway through a commit or push.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
-	var res store.PutResult
-	if collection == store.Transcripts {
-		res, err = s.store.Put(ctx, doc, user)
-	} else {
-		var results []store.PutResult
-		results, res.Git, err = s.store.PutBatch(ctx, []store.Item{{Doc: doc, Collection: collection}}, user, "")
-		if len(results) == 1 {
-			res.Result, res.Path, res.PreviousPath = results[0].Result, results[0].Path, results[0].PreviousPath
-		}
-	}
+	res, err := s.store.Put(ctx, doc, user)
 	if err != nil {
 		s.log.Error("storing transcript failed", "id", doc.ID, "user", user, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not store transcript", nil)

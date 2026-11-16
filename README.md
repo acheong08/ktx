@@ -7,7 +7,7 @@ The company context layer. Today that is **brain-server**, plus the Caddy build 
 A small Go server that owns a clone of the brain git repository.
 - **Upload:** you send a transcript over HTTP. The server checks its metadata, writes it to `transcripts/<type>/` (or `transcripts/unsorted/`), commits, and pushes to GitHub.
 - **Web UI:** you can read, search and sort transcripts in a browser. People sign in through Pocket ID (passkeys).
-- **Connectors:** ktx pulls meeting notes from Granola on a schedule into `meetings/`. Each person adds their own credential in the UI; it's stored encrypted.
+- **Connectors:** ktx pulls meeting notes from Granola on a schedule into `transcripts/meetings/`. Each person adds their own credential in the UI; it's stored encrypted.
 
 ```
 API client ──POST /v1/transcripts──┐
@@ -91,10 +91,6 @@ curl -X POST https://brain.example.com/v1/transcripts \
 
 If GitHub can't be reached, the commit stays on the server. The response has `"pushed": false` and a `push_error` message. The next upload or periodic sync pushes it.
 
-### `POST /v1/meetings`
-
-Same body, rules and responses as `/v1/transcripts`, but the document is stored in `meetings/` (no type folders), like the notes the Granola connector writes. Use it to import meeting notes from elsewhere; give them `source` and `source_id` so re-imports update rather than duplicate.
-
 ### `GET /healthz`
 
 No auth. Returns `{"ok":true}`.
@@ -131,7 +127,7 @@ The **API tokens** page lets each person create tokens for scripts (`POST /v1/tr
 
 A connection is a service ktx pulls from, with one person's credential. You add them on the **Connections** page; the owner or an admin can change or delete them.
 
-- **Granola** (Business plan API key) → `meetings/<date>-<time>-<title>-<id>.md`.
+- **Granola** (Business plan API key) → `transcripts/meetings/<date>-<time>-<title>-<id>.md`, i.e. transcripts of type `meetings`. That type is only a default for new notes: re-sort one in the UI and later syncs of it stay where you put it.
   - **Front matter:** title, date (calendar time, in the connection's time zone), participants, `source: granola`, `source_id` (the note ID), `granola_url`, `calendar_event_id`, folders.
   - **Body:** summary, the owner's own notes, transcript.
   - **What gets fetched:** only notes Granola has finished (with a summary).
@@ -233,7 +229,7 @@ box (tailnet only)                            ▼
   ktx-update.timer (every minute) ── installs /opt/ktx/releases/<tag>, restarts, rolls back if unhealthy
   caddy        ── 100.64.0.14:443, *.internal.melzi.dev cert via Cloudflare DNS challenge
      └ internal_dns ── publishes an A record → tailnet IP for every site under internal.melzi.dev
-  brain-server ── 127.0.0.1:8080: UI, API, connectors (Granola → meetings/); clones/pushes melzi-cloud/company-brain
+  brain-server ── 127.0.0.1:8080: UI, API, connectors (Granola → transcripts/meetings/); clones/pushes melzi-cloud/company-brain
      └ state.db ── users, sessions, API tokens, connections (credentials sealed with the master key)
   pocket-id    ── Podman, no network, Unix socket ← caddy (id.internal.melzi.dev); ktx signs people in here
 ```

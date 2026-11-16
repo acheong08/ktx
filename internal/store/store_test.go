@@ -142,49 +142,54 @@ func meeting(t *testing.T, sourceID, title, body string) *transcript.Doc {
 	return doc
 }
 
-func TestPutBatchMeetings(t *testing.T) {
+func TestPutBatchDefaultType(t *testing.T) {
 	s, remote := newStore(t)
 	ctx := context.Background()
 	items := []Item{
-		{Doc: meeting(t, "not_1", "Acme intro", "hello"), Collection: Meetings},
-		{Doc: meeting(t, "not_2", "Board prep", "numbers"), Collection: Meetings},
+		{Doc: meeting(t, "not_1", "Acme intro", "hello"), DefaultType: "meetings"},
+		{Doc: meeting(t, "not_2", "Board prep", "numbers"), DefaultType: "meetings"},
 	}
 	res, git, err := s.PutBatch(ctx, items, "antonio", "Sync granola", "Connection: granola/Antonio")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res) != 2 || res[0].Result != ResultCreated || !strings.HasPrefix(res[0].Path, "meetings/2026-11-15-1700-acme-intro-") || !git.Pushed {
+	if len(res) != 2 || res[0].Result != ResultCreated || !strings.HasPrefix(res[0].Path, "transcripts/meetings/2026-11-15-1700-acme-intro-") || !git.Pushed {
 		t.Fatalf("results: %+v %+v", res, git)
 	}
 	if n := gitOut(t, "--git-dir", remote, "rev-list", "--count", "main"); n != "1" {
 		t.Errorf("want one commit for the batch, got %s", n)
 	}
 	msg := gitOut(t, "--git-dir", remote, "log", "-1", "--format=%B", "main")
-	for _, want := range []string{"Sync granola: 2 added, 0 updated", "- created meetings/", "Uploaded-By: antonio", "Connection: granola/Antonio"} {
+	for _, want := range []string{"Sync granola: 2 added, 0 updated", "- created transcripts/meetings/", "Uploaded-By: antonio", "Connection: granola/Antonio"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message lacks %q:\n%s", want, msg)
 		}
 	}
+	if file := gitOut(t, "--git-dir", remote, "show", "main:"+res[0].Path); !strings.Contains(file, "type: meetings\n") {
+		t.Errorf("type not written:\n%s", file)
+	}
 
-	// Same batch again: nothing to commit. One changed: a single-item message.
-	items[0].Doc = meeting(t, "not_1", "Acme intro", "hello")
-	items[1].Doc = meeting(t, "not_2", "Board prep", "numbers, revised")
+	// Sorted by hand, then updated by the connector: it stays where it was put.
+	entries, _ := s.List()
+	var acme Entry
+	for _, e := range entries {
+		if e.Meta.Title == "Acme intro" {
+			acme = e
+		}
+	}
+	if _, err := s.SetType(ctx, acme.ID, "customer_discovery", "maxim"); err != nil {
+		t.Fatal(err)
+	}
+	items[0].Doc = meeting(t, "not_1", "Acme intro", "hello, edited")
+	items[1].Doc = meeting(t, "not_2", "Board prep", "numbers")
 	res, _, err = s.PutBatch(ctx, items, "antonio", "Sync granola")
-	if err != nil || res[0].Result != ResultUnchanged || res[1].Result != ResultUpdated {
-		t.Fatalf("second batch: %+v %v", res, err)
+	if err != nil || res[0].Result != ResultUpdated || !strings.HasPrefix(res[0].Path, "transcripts/customer_discovery/") || res[1].Result != ResultUnchanged {
+		t.Fatalf("re-sync: %+v %v", res, err)
 	}
-	if msg := gitOut(t, "--git-dir", remote, "log", "-1", "--format=%s", "main"); !strings.HasPrefix(msg, "Update meeting: Board prep") {
-		t.Errorf("subject = %q", msg)
+	if file := gitOut(t, "--git-dir", remote, "show", "main:"+res[0].Path); !strings.Contains(file, "type: customer_discovery") {
+		t.Errorf("hand-sorted type lost:\n%s", file)
 	}
-
-	entries, err := s.List()
-	if err != nil || len(entries) != 2 || entries[0].Collection != Meetings || entries[0].Folder != "meetings" {
-		t.Fatalf("list: %+v %v", entries, err)
-	}
-	if _, err := s.SetType(ctx, entries[0].ID, "advisor", "antonio"); err != ErrNotSortable {
-		t.Errorf("SetType on a meeting: %v", err)
-	}
-	if _, _, err := s.PutBatch(ctx, []Item{{Doc: items[0].Doc, Collection: "elsewhere"}}, "a", ""); err == nil {
-		t.Error("unknown collection accepted")
+	if _, _, err := s.PutBatch(ctx, []Item{{Doc: items[0].Doc, DefaultType: "../x"}}, "a", ""); err == nil {
+		t.Error("bad default type accepted")
 	}
 }

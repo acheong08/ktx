@@ -136,7 +136,7 @@ func TestSync(t *testing.T) {
 	if next != "2026-11-16T09:00:00Z" {
 		t.Errorf("cursor = %q (deleted notes must not move it)", next)
 	}
-	if len(items) != 2 || items[0].Collection != store.Meetings {
+	if len(items) != 2 || items[0].DefaultType != "meetings" {
 		t.Fatalf("items: %d", len(items))
 	}
 

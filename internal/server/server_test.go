@@ -70,12 +70,7 @@ func setup(t *testing.T) (*httptest.Server, string, string) {
 
 func post(t *testing.T, ts *httptest.Server, auth, body string) (int, map[string]any) {
 	t.Helper()
-	return postTo(t, ts, "/v1/transcripts", auth, body)
-}
-
-func postTo(t *testing.T, ts *httptest.Server, path, auth, body string) (int, map[string]any) {
-	t.Helper()
-	req, _ := http.NewRequest("POST", ts.URL+path, strings.NewReader(body))
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/transcripts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "text/markdown")
 	if auth != "" {
 		req.Header.Set("Authorization", "Bearer "+auth)
@@ -188,23 +183,6 @@ func TestUpdateWithoutTypeKeepsHandSortedFolder(t *testing.T) {
 	}
 	if tree := git(t, "--git-dir", remote, "ls-tree", "-r", "--name-only", "main"); tree != "transcripts/investor/"+name {
 		t.Errorf("remote tree = %q", tree)
-	}
-}
-
-func TestMeetings(t *testing.T) {
-	ts, remote, _ := setup(t)
-	code, out := postTo(t, ts, "/v1/meetings", token, upload)
-	if code != http.StatusCreated || !strings.HasPrefix(out["path"].(string), "meetings/2026-11-14-1000-intro-call-with-acme-") {
-		t.Fatalf("meeting upload: %d %v", code, out)
-	}
-	if msg := git(t, "--git-dir", remote, "log", "-1", "--format=%s", "main"); !strings.HasPrefix(msg, "Add meeting: Intro call with Acme") {
-		t.Errorf("subject = %q", msg)
-	}
-	if code, again := postTo(t, ts, "/v1/meetings", token, upload); code != http.StatusOK || again["result"] != "unchanged" {
-		t.Errorf("re-upload: %d %v", code, again)
-	}
-	if code, _ := postTo(t, ts, "/v1/meetings", "", upload); code != http.StatusUnauthorized {
-		t.Errorf("no token: %d", code)
 	}
 }
 

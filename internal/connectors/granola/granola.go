@@ -2,7 +2,8 @@
 // Enterprise plans): https://docs.granola.ai/introduction
 //
 // Each run lists notes updated since the bookmark, fetches each one with its
-// transcript, and stores it in meetings/ as Markdown: front matter, then the
+// transcript, and stores it in transcripts/meetings/ (type "meetings") as
+// Markdown: front matter, then the
 // summary, the owner's own notes, and the transcript. Only notes with a
 // generated summary exist in the API, so unfinished notes never land in git;
 // a note edited later overwrites the same file (git keeps the history).
@@ -27,6 +28,9 @@ import (
 	"github.com/acheong08/ktx/internal/store"
 	"github.com/acheong08/ktx/internal/transcript"
 )
+
+// DefaultType is where new Granola notes are filed: transcripts/meetings/.
+const DefaultType = "meetings"
 
 // DefaultBaseURL is Granola's API.
 const DefaultBaseURL = "https://public-api.granola.ai/v1"
@@ -54,7 +58,7 @@ func New() *Connector {
 func (c *Connector) Kind() string  { return "granola" }
 func (c *Connector) Title() string { return "Granola" }
 func (c *Connector) Description() string {
-	return "Meeting notes, summaries and transcripts from Granola, stored in meetings/. Needs a Business plan API key."
+	return "Meeting notes, summaries and transcripts from Granola, stored in transcripts/meetings/. Needs a Business plan API key."
 }
 func (c *Connector) Interval() time.Duration { return 10 * time.Minute }
 
@@ -132,7 +136,8 @@ func (c *Connector) Sync(ctx context.Context, cfg connectors.Config, cursor stri
 		if err != nil {
 			return cursor, fmt.Errorf("note %s: %w", id, err)
 		}
-		if err := emit(store.Item{Doc: doc, Collection: store.Meetings}); err != nil {
+		// New notes go to transcripts/meetings/; ones sorted by hand stay put.
+		if err := emit(store.Item{Doc: doc, DefaultType: DefaultType}); err != nil {
 			return cursor, err
 		}
 	}

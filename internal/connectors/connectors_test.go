@@ -49,7 +49,7 @@ func (f *fake) Sync(_ context.Context, cfg Config, cursor string, emit func(stor
 		if err != nil {
 			return cursor, err
 		}
-		if err := emit(store.Item{Doc: doc, Collection: store.Meetings}); err != nil {
+		if err := emit(store.Item{Doc: doc, DefaultType: "meetings"}); err != nil {
 			return cursor, err
 		}
 	}
