@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/acheong08/ktx/internal/config"
 	"github.com/acheong08/ktx/internal/gitrepo"
 	"github.com/acheong08/ktx/internal/server"
@@ -78,27 +76,18 @@ func run(log *slog.Logger) error {
 	st := store.New(repo)
 	mux := http.NewServeMux()
 	server.New(st, cfg.Tokens, cfg.MaxUploadBytes, log).Register(mux)
-	if cfg.AuthorizedKeys != "" {
-		keys, err := web.ParseAuthorizedKeys(cfg.AuthorizedKeys)
-		if err != nil {
-			return err
+	var types []string
+	for _, t := range cfg.Types {
+		if t, err = transcript.NormalizeType(t); err != nil {
+			return fmt.Errorf("BRAIN_TRANSCRIPT_TYPES: %w", err)
 		}
-		var types []string
-		for _, t := range cfg.Types {
-			if t, err = transcript.NormalizeType(t); err != nil {
-				return fmt.Errorf("BRAIN_TRANSCRIPT_TYPES: %w", err)
-			}
-			if t != "" {
-				types = append(types, t)
-			}
+		if t != "" {
+			types = append(types, t)
 		}
-		for _, k := range keys {
-			log.Info("UI login allowed", "user", k.Name, "key", ssh.FingerprintSHA256(k.Key))
-		}
-		mux.Handle("/", web.New(st, web.NewAuth(keys, cfg.SessionTTL), types, log).Handler())
-	} else {
-		log.Info("UI disabled: set BRAIN_UI_AUTHORIZED_KEYS or BRAIN_UI_AUTHORIZED_KEYS_FILE to enable it")
 	}
+	// The web UI has no login: keep brain-server on loopback or a private
+	// network (on the server, Caddy exposes it on the tailnet only).
+	mux.Handle("/", web.New(st, types, log).Handler())
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,

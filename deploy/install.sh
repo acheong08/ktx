@@ -11,7 +11,6 @@
 #   /etc/caddy/caddy.env           Cloudflare token (fill in by hand)
 #   /etc/ktx/brain-server.env      API tokens are generated here
 #   /etc/ktx/company-brain.key     deploy key for the data repo (copy in by hand)
-#   /etc/ktx/authorized_keys       SSH public keys allowed into the web UI
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -46,7 +45,7 @@ fi
 curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .' >/etc/ktx/known_hosts.new
 mv /etc/ktx/known_hosts.new /etc/ktx/known_hosts
 chmod 644 /etc/ktx/known_hosts
-for f in /etc/ktx/company-brain.key /etc/ktx/authorized_keys; do
+for f in /etc/ktx/company-brain.key; do
 	[ -e "$f" ] && chown ktx:ktx "$f" && chmod 600 "$f"
 done
 

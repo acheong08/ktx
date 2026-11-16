@@ -24,10 +24,7 @@ type Config struct {
 	SyncInterval   time.Duration
 	MaxUploadBytes int64
 
-	// UI. AuthorizedKeys is empty when the UI is off.
-	AuthorizedKeys string // authorized_keys lines: inline value plus file contents
-	SessionTTL     time.Duration
-	Types          []string // type suggestions when sorting
+	Types []string // type suggestions in the web UI
 }
 
 // Load reads the environment and reports every missing or invalid value.
@@ -64,17 +61,6 @@ func Load() (Config, error) {
 	}
 	c.MaxUploadBytes = mb << 20
 
-	c.AuthorizedKeys = os.Getenv("BRAIN_UI_AUTHORIZED_KEYS")
-	if f := os.Getenv("BRAIN_UI_AUTHORIZED_KEYS_FILE"); f != "" {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("BRAIN_UI_AUTHORIZED_KEYS_FILE: %w", err))
-		}
-		c.AuthorizedKeys = strings.TrimSpace(c.AuthorizedKeys + "\n" + string(b))
-	}
-	if c.SessionTTL, err = time.ParseDuration(env("BRAIN_UI_SESSION_TTL", "168h")); err != nil || c.SessionTTL <= 0 {
-		errs = append(errs, errors.New("BRAIN_UI_SESSION_TTL must be a positive duration like 168h"))
-	}
 	for _, t := range strings.Split(env("BRAIN_TRANSCRIPT_TYPES", "advisor,customer_discovery,investor,internal"), ",") {
 		if t = strings.TrimSpace(t); t != "" {
 			c.Types = append(c.Types, t)

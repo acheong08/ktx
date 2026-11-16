@@ -1,6 +1,9 @@
 // Package web serves the browser UI for reading and sorting transcripts.
-// Pages are templ components; interactions use htmx 4. Login is by signing a
-// challenge with an SSH key (ssh-keygen -Y sign).
+// Pages are templ components; interactions use htmx 4.
+//
+// There is no login: the UI is meant to be reachable only on a private
+// network (the tailnet, behind Caddy). Cross-origin form posts are still
+// refused, so other websites can't drive the UI through a visitor's browser.
 package web
 
 //go:generate go tool templ generate
@@ -14,7 +17,9 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"sort"
@@ -34,12 +39,9 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-const cookieName = "brain_session"
-
 // UI is the web interface.
 type UI struct {
 	store  *store.Store
-	auth   *Auth
 	types  []string // suggested types, merged with the folders that exist
 	log    *slog.Logger
 	assets assets
@@ -49,9 +51,9 @@ type UI struct {
 type assets struct{ CSS, JS, HTMX string }
 
 // New builds the UI. types are suggestions offered when sorting.
-func New(st *store.Store, auth *Auth, types []string, log *slog.Logger) *UI {
+func New(st *store.Store, types []string, log *slog.Logger) *UI {
 	return &UI{
-		store: st, auth: auth, types: types, log: log,
+		store: st, types: types, log: log,
 		assets: assets{
 			CSS:  assetURL("style.css"),
 			JS:   assetURL("app.js"),
@@ -84,14 +86,10 @@ func (u *UI) Handler() http.Handler {
 		files.ServeHTTP(w, r)
 	})))
 
-	mux.HandleFunc("GET /login", u.loginPage)
-	mux.HandleFunc("POST /login", u.login)
-	mux.HandleFunc("POST /logout", u.logout)
-
-	mux.HandleFunc("GET /{$}", u.requireUser(u.list))
-	mux.HandleFunc("GET /sort", u.requireUser(u.sortNext))
-	mux.HandleFunc("GET /transcripts/{id}", u.requireUser(u.detail))
-	mux.HandleFunc("POST /transcripts/{id}/type", u.requireUser(u.setType))
+	mux.HandleFunc("GET /{$}", u.list)
+	mux.HandleFunc("GET /sort", u.sortNext)
+	mux.HandleFunc("GET /transcripts/{id}", u.detail)
+	mux.HandleFunc("POST /transcripts/{id}/type", u.setType)
 
 	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))
 }
@@ -106,136 +104,19 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-type ctxUser struct{}
-
-func userOf(r *http.Request) string { s, _ := r.Context().Value(ctxUser{}).(string); return s }
-
-func (u *UI) requireUser(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie(cookieName); err == nil {
-			if user, ok := u.auth.User(c.Value); ok {
-				next(w, r.WithContext(context.WithValue(r.Context(), ctxUser{}, user)))
-				return
-			}
-		}
-		if r.Header.Get("HX-Request") == "true" {
-			w.Header().Set("HX-Redirect", "/login")
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+// actor describes who made a change, for commit trailers. Without a login
+// it's the client's address: Caddy passes the tailnet IP in X-Forwarded-For.
+func actor(r *http.Request) string {
+	ip := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
 	}
-}
-
-// --- login -----------------------------------------------------------------
-
-type loginView struct {
-	Assets    assets
-	Challenge string
-	Variants  []cmdVariant
-	Selected  string // variant picked from the User-Agent
-	KeyPath   string
-	Command   string // the selected variant with KeyPath, for browsers without JS
-	Error     string
-}
-
-// cmdVariant is one way to run the signing command: how the signature gets
-// to the clipboard differs per OS. Template holds "{key}" for the key path,
-// which app.js fills in from the key field.
-type cmdVariant struct{ Value, Label, Template string }
-
-const defaultKeyPath = "~/.ssh/id_ed25519"
-
-// The challenge goes through a file rather than a pipe so ssh-keygen keeps
-// the terminal on stdin and can ask for the key's passphrase (with a pipe
-// it falls back to ssh-askpass, which most Linux setups don't have). The
-// syntax works in bash, zsh, sh and fish.
-var clipboards = []struct{ value, label, copy string }{
-	{"macos", "macOS (pbcopy)", "pbcopy < " + sigFile},
-	{"wayland", "Linux, Wayland (wl-copy)", "wl-copy < " + sigFile},
-	{"x11", "Linux, X11 (xclip)", "xclip -selection clipboard < " + sigFile},
-	{"print", "Print it", "cat " + sigFile},
-}
-
-const (
-	msgFile = "~/.brain-login"
-	sigFile = msgFile + ".sig"
-)
-
-// signCommand is the shell command for one clipboard variant, with "{key}"
-// where the key path goes. The leading rm avoids ssh-keygen's "overwrite?"
-// prompt if an earlier run left a signature behind.
-func signCommand(challenge, copy string) string {
-	return "rm -f " + sigFile + "; printf '%s' '" + challenge + "' > " + msgFile +
-		" && ssh-keygen -Y sign -n " + Namespace + " -f {key} " + msgFile +
-		" && " + copy + "; rm -f " + msgFile + " " + sigFile
-}
-
-// clipboardFor guesses the variant from a User-Agent. Linux browsers don't
-// say whether they run on Wayland or X11 (Firefox always says X11), so Linux
-// gets Wayland, the default on current desktops; the choice is remembered.
-func clipboardFor(userAgent string) string {
-	switch {
-	case strings.Contains(userAgent, "Macintosh"), strings.Contains(userAgent, "Mac OS X"):
-		return "macos"
-	case strings.Contains(userAgent, "Linux") && !strings.Contains(userAgent, "Android"):
-		return "wayland"
-	default:
-		return "print"
-	}
-}
-
-func (u *UI) newLoginView(r *http.Request, challenge, errMsg string) loginView {
-	if challenge == "" || !u.auth.ChallengeValid(challenge) {
-		challenge = u.auth.NewChallenge()
-	}
-	v := loginView{Assets: u.assets, Challenge: challenge, Selected: clipboardFor(r.UserAgent()), KeyPath: defaultKeyPath, Error: errMsg}
-	for _, c := range clipboards {
-		tmpl := signCommand(challenge, c.copy)
-		v.Variants = append(v.Variants, cmdVariant{c.value, c.label, tmpl})
-		if c.value == v.Selected {
-			v.Command = strings.ReplaceAll(tmpl, "{key}", defaultKeyPath)
+	if a, err := netip.ParseAddr(ip); err == nil && a.IsLoopback() {
+		if fwd, _, _ := strings.Cut(r.Header.Get("X-Forwarded-For"), ","); strings.TrimSpace(fwd) != "" {
+			ip = strings.TrimSpace(fwd)
 		}
 	}
-	return v
-}
-
-func (u *UI) loginPage(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		if _, ok := u.auth.User(c.Value); ok {
-			http.Redirect(w, r, "/", http.StatusSeeOther)
-			return
-		}
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	u.render(w, r, http.StatusOK, loginPage(u.newLoginView(r, "", "")))
-}
-
-func (u *UI) login(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-	challenge, signature := r.PostFormValue("challenge"), r.PostFormValue("signature")
-	token, user, err := u.auth.Login(challenge, signature)
-	if err != nil {
-		u.log.Warn("login failed", "err", err, "remote", r.RemoteAddr)
-		w.Header().Set("Cache-Control", "no-store")
-		u.render(w, r, http.StatusUnauthorized, loginPage(u.newLoginView(r, challenge, err.Error())))
-		return
-	}
-	u.log.Info("login", "user", user, "remote", r.RemoteAddr)
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: token, Path: "/",
-		MaxAge: int(u.auth.ttl.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func (u *UI) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		u.auth.Logout(c.Value)
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	return "web UI (" + ip + ")"
 }
 
 // --- transcripts list ------------------------------------------------------
@@ -275,7 +156,7 @@ func (u *UI) list(w http.ResponseWriter, r *http.Request) {
 		u.render(w, r, http.StatusOK, results(v))
 		return
 	}
-	u.render(w, r, http.StatusOK, listPage(userOf(r), v))
+	u.render(w, r, http.StatusOK, listPage(v))
 }
 
 func (u *UI) listView(q, folder, sortBy string) (listView, error) {
@@ -406,7 +287,7 @@ func (u *UI) renderDetail(w http.ResponseWriter, r *http.Request, status int, id
 		u.fail(w, r, err)
 		return
 	}
-	u.render(w, r, status, detailPage(userOf(r), detailView{
+	u.render(w, r, status, detailPage(detailView{
 		Assets: u.assets, Entry: e, BodyHTML: body.String(), Types: u.typeOptions(entries),
 		BackURL: listURL("", e.Folder, ""), BackLabel: e.Folder, Flash: fl,
 	}))
@@ -415,7 +296,7 @@ func (u *UI) renderDetail(w http.ResponseWriter, r *http.Request, status int, id
 // --- sorting ---------------------------------------------------------------
 
 func (u *UI) setType(w http.ResponseWriter, r *http.Request) {
-	id, user := r.PathValue("id"), userOf(r)
+	id, user := r.PathValue("id"), actor(r)
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	typ := r.PostFormValue("type")
 
@@ -512,7 +393,7 @@ func (u *UI) fail(w http.ResponseWriter, r *http.Request, err error) {
 		u.render(w, r, status, flashBox(flash{"error", msg}))
 		return
 	}
-	u.render(w, r, status, errorPage(userOf(r), u.assets, msg))
+	u.render(w, r, status, errorPage(u.assets, msg))
 }
 
 // --- view helpers used by the templates --------------------------------------

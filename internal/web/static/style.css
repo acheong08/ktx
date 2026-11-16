@@ -43,7 +43,6 @@ header.top {
 }
 .brand { font-weight: 700; color: var(--fg); }
 header nav { flex: 1; }
-.logout { display: flex; align-items: center; gap: .75rem; color: var(--muted); }
 
 input, select, textarea, button {
   font: inherit; color: inherit;
@@ -56,7 +55,6 @@ button, .button {
   border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; color: var(--fg);
 }
 button.primary, .button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.link { background: none; border: 0; color: var(--accent); padding: 0; }
 button:disabled, input:disabled { opacity: .6; }
 
 .flash { padding: .6rem .8rem; border-radius: 6px; border: 1px solid; margin: 0 0 1rem; }
@@ -97,13 +95,3 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain a { margin-left: .4rem; font-size: 14px; }
 .body { border-top: 1px solid var(--line); padding-top: 1rem; max-width: 75ch; }
 .body p { margin: 0 0 .8rem; }
-
-.login { max-width: 46rem; margin: 2rem auto; }
-.cmd-options { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-bottom: .5rem; color: var(--muted); font-size: 14px; }
-.cmd-options label { display: flex; align-items: center; gap: .5rem; }
-.cmd-options input { width: 16rem; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
-.command { display: flex; gap: .5rem; align-items: flex-start; }
-.command pre { flex: 1; margin: 0; padding: .6rem .8rem; background: var(--soft); border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
-.hint { color: var(--muted); font-size: 14px; }
-#login-form { display: grid; gap: .5rem; margin-top: 1rem; }
-#login-form button { justify-self: start; }

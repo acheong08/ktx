@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-templ layout(title string, user string, a assets) {
+templ layout(title string, a assets) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -19,13 +19,7 @@ templ layout(title string, user string, a assets) {
 		<body>
 			<header class="top">
 				<a class="brand" href="/">brain</a>
-				if user != "" {
-					<nav><a href="/">Transcripts</a></nav>
-					<form class="logout" method="post" action="/logout">
-						<span class="user">{ user }</span>
-						<button type="submit" class="link">Log out</button>
-					</form>
-				}
+				<nav><a href="/">Transcripts</a></nav>
 			</header>
 			<main>
 				{ children... }
@@ -40,53 +34,15 @@ templ flashBox(f flash) {
 	}
 }
 
-templ errorPage(user string, a assets, msg string) {
-	@layout("Error", user, a) {
+templ errorPage(a assets, msg string) {
+	@layout("Error", a) {
 		@flashBox(flash{"error", msg})
 		<p><a href="/">Back to transcripts</a></p>
 	}
 }
 
-templ loginPage(v loginView) {
-	@layout("Log in", "", v.Assets) {
-		<section class="login">
-			<h1>Log in</h1>
-			<p>Sign this challenge with an SSH key from the server's authorized keys. It expires in 5 minutes and works once.</p>
-			<div class="cmd-options">
-				<label>
-					Copy with
-					<select id="cmd-variant">
-						for _, o := range v.Variants {
-							<option value={ o.Value } data-template={ o.Template } selected?={ o.Value == v.Selected }>{ o.Label }</option>
-						}
-					</select>
-				</label>
-				<label>
-					Key
-					<input id="key-path" type="text" value={ v.KeyPath } spellcheck="false" autocomplete="off"/>
-				</label>
-			</div>
-			<div class="command">
-				<pre id="login-cmd">{ v.Command }</pre>
-				<button type="button" data-copy="#login-cmd">Copy</button>
-			</div>
-			<p class="hint">
-				Both choices are remembered in this browser. For a key held by an agent (e.g. 1Password),
-				use the path of its <code>.pub</code> file.
-			</p>
-			@flashBox(flash{"error", v.Error})
-			<form method="post" action="/login" id="login-form">
-				<input type="hidden" name="challenge" value={ v.Challenge }/>
-				<label for="signature">Signature</label>
-				<textarea id="signature" name="signature" rows="7" required autofocus spellcheck="false" placeholder="-----BEGIN SSH SIGNATURE-----"></textarea>
-				<button type="submit" class="primary">Log in</button>
-			</form>
-		</section>
-	}
-}
-
-templ listPage(user string, v listView) {
-	@layout("Transcripts", user, v.Assets) {
+templ listPage(v listView) {
+	@layout("Transcripts", v.Assets) {
 		<form id="filters" class="filters" action="/" method="get" hx-get="/" hx-target="#results" hx-push-url="true" hx-trigger="input delay:300ms, submit">
 			<input class="filter-field" type="search" name="q" value={ v.Q } placeholder="Search titles, people, tags, text…" aria-label="Search" autocomplete="off"/>
 			<select class="filter-field" name="sort" aria-label="Sort">
@@ -175,8 +131,8 @@ templ results(v listView) {
 	}
 }
 
-templ detailPage(user string, v detailView) {
-	@layout(v.Entry.Label(), user, v.Assets) {
+templ detailPage(v detailView) {
+	@layout(v.Entry.Label(), v.Assets) {
 		<p class="back"><a href={ templ.URL(v.BackURL) }>← { v.BackLabel }</a></p>
 		<article class="transcript">
 			<h1>{ v.Entry.Label() }</h1>
