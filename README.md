@@ -116,10 +116,16 @@ The server only needs your **public** key. Nothing secret goes in the config.
 
 1. `/login` shows a one-time challenge and a command to run:
    ```sh
-   printf '%s' 'brain-login:…' | ssh-keygen -Y sign -n brain-server -f ~/.ssh/id_ed25519 | pbcopy
+   printf '%s' 'brain-login:…' | ssh-keygen -Y sign -n brain-server -f ~/.ssh/id_ed25519 | wl-copy
    ```
-   - For a key held by an agent (e.g. 1Password), use `-f ~/.ssh/<key>.pub`.
-   - Drop `| pbcopy` to print the signature instead.
+   - **How the signature reaches the clipboard** depends on your system:
+     - macOS: `pbcopy`
+     - Linux on Wayland: `wl-copy`
+     - Linux on X11: `xclip`
+     - or just print it.
+   - **Choosing the default:** the page picks one from your browser's User-Agent. Browsers don't reveal Wayland vs X11, so Linux defaults to Wayland.
+   - **Changing it:** pick a different method or key path on the page; both are remembered in the browser.
+   - **Agent-held keys** (e.g. 1Password): use the path of the `.pub` file.
 2. Paste the signature. The form submits itself once a full signature is pasted.
 
 How it's checked:
@@ -221,6 +227,7 @@ box (tailnet only)                            ▼
 | `/etc/ktx/authorized_keys` | SSH public keys allowed into the web UI |
 | `/opt/ktx/current` → `releases/<tag>` | Running binaries |
 | `/usr/local/libexec/ktx-update` | Release installer (from `deploy/ktx-update/`) |
+| `/usr/local/libexec/ktx-ssh-guard` | Closes public SSH while Tailscale is healthy (from `deploy/ssh-guard/`) |
 
 **Adding an internal site** means dropping in a file like this:
 
@@ -244,6 +251,21 @@ What `internal_dns` touches, and what it doesn't:
    - verifies the checksum, switches `/opt/ktx/current`, and restarts brain-server (and Caddy, only if its binary changed);
    - checks `/healthz`. If the release doesn't come up healthy, it rolls back and never retries that tag.
 3. Logs: `journalctl -u ktx-update`.
+
+**SSH guard:** public SSH (port 22) is dropped by an nftables rule while Tailscale is healthy. SSH over the tailnet always works.
+- **How it works:** the rule is a dead man's switch. It only applies while a set entry exists, and that entry expires after 3 minutes. `ktx-ssh-guard.timer` renews it every 30s, but only while `tailscaled` is running, logged in, and has a tailnet address.
+- **When public SSH opens again:**
+  - within about 30s of Tailscale going down;
+  - within 3 minutes if the guard itself stops running;
+  - at boot, until Tailscale is up.
+- **Tested on the box:** stopping `tailscaled` opened public SSH after about 38s, and starting it closed public SSH again. Stopping the guard opened public SSH once the entry expired.
+- **Check it:** `nft list table inet ktx_ssh_guard` and `journalctl -u ktx-ssh-guard`.
+- **Last resort if both paths fail:** the Hetzner web console.
+
+**Automatic updates:**
+- **OS:** dnf-automatic installs all updates daily (06:00 UTC, plus up to an hour of random delay) and reboots when an update needs it.
+- **After a reboot**, everything comes back on its own: Tailscale, the SSH guard, Caddy (which retries until the tailnet address exists), brain-server and the timers. Tested with a real reboot.
+- **Caddy and Go dependencies** are separate: Dependabot opens weekly PRs. Merge them, then publish a release.
 
 **Setting up a new box:** copy the repo to it and run `deploy/install.sh <brain-server> <caddy>` as root, with binaries from a release or from `go build`. Then add the Cloudflare token, the data-repo key and the UI keys. The script is safe to re-run.
 

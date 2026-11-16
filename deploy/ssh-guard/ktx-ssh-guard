@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# ktx-ssh-guard: SSH only over the tailnet while Tailscale is healthy, and
+# open on every interface when it isn't.
+#
+# It works as a dead man's switch. The nftables rule that drops SSH from
+# outside the tailnet only matches while the set "tailnet_up" holds the SSH
+# port, and that entry expires after $TTL. This script (run every 30s by
+# ktx-ssh-guard.timer) renews it only while Tailscale is healthy. So SSH
+# opens up again when:
+#   - Tailscale is down, logged out, or has no tailnet address (within 30s),
+#   - this script, its timer, or systemd stop running (within $TTL),
+#   - the machine boots (the set starts empty until the first check passes).
+set -euo pipefail
+
+PORT=${KTX_SSH_PORT:-22}
+TTL=${KTX_SSH_GUARD_TTL:-3m}
+STATE=/run/ktx-ssh-guard.state
+
+if ! nft list table inet ktx_ssh_guard >/dev/null 2>&1; then
+	nft -f - <<EOF
+table inet ktx_ssh_guard {
+	set tailnet_up {
+		type inet_service
+		flags timeout
+	}
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+		iifname { "lo", "tailscale0" } accept
+		tcp dport @tailnet_up drop
+	}
+}
+EOF
+fi
+
+healthy() {
+	systemctl is-active --quiet tailscaled.service &&
+		tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null &&
+		ip -4 -o addr show dev tailscale0 2>/dev/null | grep -q ' inet 100\.'
+}
+
+if healthy; then
+	nft -f - <<EOF
+flush set inet ktx_ssh_guard tailnet_up
+add element inet ktx_ssh_guard tailnet_up { $PORT timeout $TTL }
+EOF
+	now=tailnet-only
+else
+	nft flush set inet ktx_ssh_guard tailnet_up
+	now=open
+fi
+
+if [ "$now" != "$(cat $STATE 2>/dev/null || true)" ]; then
+	case $now in
+	open) echo "Tailscale is not healthy: SSH is open on all interfaces" ;;
+	*) echo "Tailscale is healthy: SSH only over the tailnet" ;;
+	esac
+	echo "$now" >$STATE
+fi

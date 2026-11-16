@@ -1,0 +1,6 @@
+[Unit]
+Description=Close public SSH while Tailscale is healthy
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/ktx-ssh-guard

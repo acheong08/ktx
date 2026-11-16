@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Sets up (or re-applies) a ktx server: Caddy + brain-server + ktx-update.
+# Sets up (or re-applies) a ktx server: Caddy, brain-server, ktx-update,
+# the SSH guard (public SSH closed while Tailscale is healthy) and automatic
+# OS updates.
 # Idempotent. Run as root from a checkout (or copy) of this repository:
 #
 #     sudo deploy/install.sh [path/to/brain-server path/to/caddy]
@@ -48,8 +50,22 @@ for f in /etc/ktx/company-brain.key /etc/ktx/authorized_keys; do
 	[ -e "$f" ] && chown ktx:ktx "$f" && chmod 600 "$f"
 done
 
-# Updater and units
+# Automatic OS updates: apply all updates daily, reboot when one needs it
+# (kernel, glibc, ...). Everything below comes back up on boot.
+if command -v dnf >/dev/null; then
+	dnf install -y -q dnf-automatic
+	sed -i -e 's/^apply_updates = .*/apply_updates = yes/' \
+		-e 's/^reboot = .*/reboot = when-needed/' /etc/dnf/automatic.conf
+	systemctl enable --now dnf-automatic.timer
+elif command -v apt-get >/dev/null; then
+	apt-get install -y -qq unattended-upgrades
+	echo 'Unattended-Upgrade::Automatic-Reboot "true";' >/etc/apt/apt.conf.d/52ktx-reboot
+	systemctl enable --now unattended-upgrades.service
+fi
+
+# Updater, SSH guard and units
 install -m 755 deploy/ktx-update/ktx-update /usr/local/libexec/ktx-update
+install -m 755 deploy/ssh-guard/ktx-ssh-guard /usr/local/libexec/ktx-ssh-guard
 install -m 644 deploy/systemd/*.service deploy/systemd/*.path deploy/systemd/*.timer /etc/systemd/system/
 
 # First install: use the binaries given on the command line.
@@ -66,7 +82,8 @@ if [ ! -e /opt/ktx/current ]; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now caddy-reload.path ktx-update.timer
+systemctl enable --now caddy-reload.path ktx-update.timer ktx-ssh-guard.timer
+systemctl enable tailscaled.service
 systemctl enable caddy.service brain-server.service
 systemctl restart brain-server.service
 systemctl restart caddy.service # skipped until the Cloudflare token is set
@@ -74,5 +91,6 @@ systemctl restart caddy.service # skipped until the Cloudflare token is set
 echo
 echo "brain-server: $(systemctl is-active brain-server.service)"
 echo "caddy:        $(systemctl is-active caddy.service)"
+echo "ssh guard:    $(cat /run/ktx-ssh-guard.state 2>/dev/null || echo 'starting')"
 grep -q '^CLOUDFLARE_API_TOKEN=..*' /etc/caddy/caddy.env ||
 	echo "Caddy waits for CLOUDFLARE_API_TOKEN in /etc/caddy/caddy.env; it starts by itself once that's saved."

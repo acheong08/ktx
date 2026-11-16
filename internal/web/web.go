@@ -132,20 +132,54 @@ func (u *UI) requireUser(next http.HandlerFunc) http.HandlerFunc {
 type loginView struct {
 	Assets    assets
 	Challenge string
-	Command   string
+	Variants  []cmdVariant
+	Selected  string // variant picked from the User-Agent
+	KeyPath   string
+	Command   string // the selected variant with KeyPath, for browsers without JS
 	Error     string
 }
 
-func (u *UI) newLoginView(challenge, errMsg string) loginView {
+// cmdVariant is one way to run the signing command: how the signature gets
+// to the clipboard differs per OS. Template holds "{key}" for the key path,
+// which app.js fills in from the key field.
+type cmdVariant struct{ Value, Label, Template string }
+
+const defaultKeyPath = "~/.ssh/id_ed25519"
+
+var clipboards = []struct{ value, label, pipe string }{
+	{"macos", "macOS (pbcopy)", " | pbcopy"},
+	{"wayland", "Linux, Wayland (wl-copy)", " | wl-copy"},
+	{"x11", "Linux, X11 (xclip)", " | xclip -selection clipboard"},
+	{"print", "Print it", ""},
+}
+
+// clipboardFor guesses the variant from a User-Agent. Linux browsers don't
+// say whether they run on Wayland or X11 (Firefox always says X11), so Linux
+// gets Wayland, the default on current desktops; the choice is remembered.
+func clipboardFor(userAgent string) string {
+	switch {
+	case strings.Contains(userAgent, "Macintosh"), strings.Contains(userAgent, "Mac OS X"):
+		return "macos"
+	case strings.Contains(userAgent, "Linux") && !strings.Contains(userAgent, "Android"):
+		return "wayland"
+	default:
+		return "print"
+	}
+}
+
+func (u *UI) newLoginView(r *http.Request, challenge, errMsg string) loginView {
 	if challenge == "" || !u.auth.ChallengeValid(challenge) {
 		challenge = u.auth.NewChallenge()
 	}
-	return loginView{
-		Assets:    u.assets,
-		Challenge: challenge,
-		Command:   "printf '%s' '" + challenge + "' | ssh-keygen -Y sign -n " + Namespace + " -f ~/.ssh/id_ed25519 | pbcopy",
-		Error:     errMsg,
+	v := loginView{Assets: u.assets, Challenge: challenge, Selected: clipboardFor(r.UserAgent()), KeyPath: defaultKeyPath, Error: errMsg}
+	for _, c := range clipboards {
+		tmpl := "printf '%s' '" + challenge + "' | ssh-keygen -Y sign -n " + Namespace + " -f {key}" + c.pipe
+		v.Variants = append(v.Variants, cmdVariant{c.value, c.label, tmpl})
+		if c.value == v.Selected {
+			v.Command = strings.ReplaceAll(tmpl, "{key}", defaultKeyPath)
+		}
 	}
+	return v
 }
 
 func (u *UI) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +190,7 @@ func (u *UI) loginPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	u.render(w, r, http.StatusOK, loginPage(u.newLoginView("", "")))
+	u.render(w, r, http.StatusOK, loginPage(u.newLoginView(r, "", "")))
 }
 
 func (u *UI) login(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +200,7 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		u.log.Warn("login failed", "err", err, "remote", r.RemoteAddr)
 		w.Header().Set("Cache-Control", "no-store")
-		u.render(w, r, http.StatusUnauthorized, loginPage(u.newLoginView(challenge, err.Error())))
+		u.render(w, r, http.StatusUnauthorized, loginPage(u.newLoginView(r, challenge, err.Error())))
 		return
 	}
 	u.log.Info("login", "user", user, "remote", r.RemoteAddr)

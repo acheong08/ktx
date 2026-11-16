@@ -99,6 +99,9 @@ ul.plain a { margin-left: .4rem; font-size: 14px; }
 .body p { margin: 0 0 .8rem; }
 
 .login { max-width: 46rem; margin: 2rem auto; }
+.cmd-options { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-bottom: .5rem; color: var(--muted); font-size: 14px; }
+.cmd-options label { display: flex; align-items: center; gap: .5rem; }
+.cmd-options input { width: 16rem; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .command { display: flex; gap: .5rem; align-items: flex-start; }
 .command pre { flex: 1; margin: 0; padding: .6rem .8rem; background: var(--soft); border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
 .hint { color: var(--muted); font-size: 14px; }

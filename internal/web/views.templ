@@ -52,13 +52,27 @@ templ loginPage(v loginView) {
 		<section class="login">
 			<h1>Log in</h1>
 			<p>Sign this challenge with an SSH key from the server's authorized keys. It expires in 5 minutes and works once.</p>
+			<div class="cmd-options">
+				<label>
+					Copy with
+					<select id="cmd-variant">
+						for _, o := range v.Variants {
+							<option value={ o.Value } data-template={ o.Template } selected?={ o.Value == v.Selected }>{ o.Label }</option>
+						}
+					</select>
+				</label>
+				<label>
+					Key
+					<input id="key-path" type="text" value={ v.KeyPath } spellcheck="false" autocomplete="off"/>
+				</label>
+			</div>
 			<div class="command">
 				<pre id="login-cmd">{ v.Command }</pre>
 				<button type="button" data-copy="#login-cmd">Copy</button>
 			</div>
 			<p class="hint">
-				Change <code>-f</code> to use another key. For a key held by an agent (e.g. 1Password),
-				point <code>-f</code> at its <code>.pub</code> file. Drop <code>| pbcopy</code> to print the signature instead.
+				Both choices are remembered in this browser. For a key held by an agent (e.g. 1Password),
+				use the path of its <code>.pub</code> file.
 			</p>
 			@flashBox(flash{"error", v.Error})
 			<form method="post" action="/login" id="login-form">

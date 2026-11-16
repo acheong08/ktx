@@ -185,6 +185,23 @@ func put(t *testing.T, st *store.Store, src string) string {
 	return doc.ID
 }
 
+func TestLoginCommandFollowsOS(t *testing.T) {
+	e := setup(t)
+	for ua, want := range map[string]string{
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15":      "| pbcopy</pre>",
+		"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0": "| wl-copy</pre>",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64)":                              "-f ~/.ssh/id_ed25519</pre>",
+	} {
+		_, page, _ := e.do(t, "GET", "/login", nil, "User-Agent", ua)
+		if !strings.Contains(page, want) {
+			t.Errorf("%s: command should end with %q", ua, want)
+		}
+		if !strings.Contains(page, `data-template="printf &#39;%s&#39; &#39;brain-login:`) || !strings.Contains(page, "xclip -selection clipboard") {
+			t.Errorf("%s: variants missing", ua)
+		}
+	}
+}
+
 func TestUIFlow(t *testing.T) {
 	e := setup(t)
 	id := put(t, e.st, "---\ntitle: Acme <intro>\ndate: 2026-11-14T10:00:00-08:00\ntimezone: America/Los_Angeles\nparticipants: [Jane Doe <jane@acme.com>]\nsource: granola\nsource_id: a\n---\n**Jane:** <script>alert(1)</script> tenant isolation\n")

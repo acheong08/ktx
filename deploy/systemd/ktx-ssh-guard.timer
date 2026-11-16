@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-check Tailscale health for the SSH guard every 30s
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
