@@ -91,6 +91,10 @@ curl -X POST https://brain.example.com/v1/transcripts \
 
 If GitHub can't be reached, the commit stays on the server. The response has `"pushed": false` and a `push_error` message. The next upload or periodic sync pushes it.
 
+### `POST /v1/meetings`
+
+Same body, rules and responses as `/v1/transcripts`, but the document is stored in `meetings/` (no type folders), like the notes the Granola connector writes. Use it to import meeting notes from elsewhere; give them `source` and `source_id` so re-imports update rather than duplicate.
+
 ### `GET /healthz`
 
 No auth. Returns `{"ok":true}`.
