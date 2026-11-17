@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"html"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -98,11 +99,15 @@ func TestCalendarUI(t *testing.T) {
 	}
 
 	// Pick the other event by hand, then "no event", then automatic again.
-	opt := regexp.MustCompile(`<option value="(antonio/personal\nstandup\n)"`).FindStringSubmatch(body)
+	opt := regexp.MustCompile(`<option value="([^"]*uid=standup[^"]*)"`).FindStringSubmatch(body)
 	if opt == nil {
 		t.Fatalf("no standup choice:\n%s", body)
 	}
-	if code, body, _ = ant.do(t, "POST", "/transcripts/"+id+"/event", url.Values{"event": {opt[1]}}); code != 200 || !strings.Contains(body, "Standup") || !strings.Contains(body, "chosen by hand") || strings.Contains(body, "jane@acme.com") {
+	choice := html.UnescapeString(opt[1])
+	if strings.ContainsAny(choice, "\r\n") {
+		t.Fatalf("option value has line breaks: %q", choice)
+	}
+	if code, body, _ = ant.do(t, "POST", "/transcripts/"+id+"/event", url.Values{"event": {choice}}); code != 200 || !strings.Contains(body, "Standup") || !strings.Contains(body, "chosen by hand") || strings.Contains(body, "jane@acme.com") {
 		t.Errorf("manual pick: %d", code)
 	}
 	if _, body, _ = max.do(t, "POST", "/transcripts/"+id+"/event", url.Values{"event": {"none"}}); !strings.Contains(body, "no event, set by hand") {

@@ -193,7 +193,7 @@ The first sign-in creates a `personal` calendar. Rename a calendar on **Settings
 When a transcript is stored, and whenever calendars change, ktx looks for the event it was recorded in, across everyone's calendars:
 
 1. **Exact:** the recording names its event (Granola's `calendar_event_id`, including Google's per-occurrence ids).
-2. **By time:** an event (not all-day) that started within 15 minutes of the call, or that the call started during. An event with guests beats one without; then the nearest start; then the title most like the call's. A tie is no match. The same event in several calendars counts once.
+2. **By time:** an event (not all-day) that started within 15 minutes of the call, or that the call started during. An event with guests beats one without; then the one with more of the call's own participants (email among its guests, or full name in its title); then the nearest start; then the title most like the call's. A tie is no match. Every transcript is re-matched when the server starts, so rule changes apply to existing ones. The same event in several calendars counts once.
 
 The result goes into the transcript's front matter, and the event's organizer and guests (minus declined ones and rooms) are added to its participants, marked `from: calendar`:
 

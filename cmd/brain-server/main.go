@@ -119,6 +119,13 @@ func run(log *slog.Logger) error {
 	mux := http.NewServeMux()
 	server.New(st, cfg.Tokens, db, cfg.MaxUploadBytes, log).Register(mux)
 	dav.New(cal, db, log).Register(mux) // CalDAV, with calendar tokens
+	go func() {                         // apply the current matching rules to every transcript
+		if n, err := cal.RelinkAll(ctx); err != nil {
+			log.Error("relinking transcripts", "err", err)
+		} else if n > 0 {
+			log.Info("relinked transcripts to calendar events", "changed", n)
+		}
+	}()
 	var types []string
 	for _, t := range cfg.Types {
 		if t, err = transcript.NormalizeType(t); err != nil {

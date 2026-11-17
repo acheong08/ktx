@@ -123,6 +123,25 @@ func (s *Service) update(ctx context.Context, user string, fn func(root string) 
 	})
 }
 
+// RelinkAll re-matches every transcript against the calendars and commits
+// the ones whose links changed (e.g. after the matching rules improve). It
+// returns how many changed.
+func (s *Service) RelinkAll(ctx context.Context) (int, error) {
+	if s.relink == nil {
+		return 0, nil
+	}
+	n := 0
+	_, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
+		paths, err := s.relink(root)
+		n = len(paths)
+		if err != nil || n == 0 {
+			return gitrepo.Change{Paths: paths}, err
+		}
+		return gitrepo.Change{Paths: paths, Message: fmt.Sprintf("Relink %d transcripts to calendar events\n\nChanged-By: ktx\nRelinked-Transcripts: %d", n, n)}, nil
+	})
+	return n, err
+}
+
 // CreateCalendar makes a new calendar.
 func (s *Service) CreateCalendar(ctx context.Context, c Calendar, user string) error {
 	_, err := s.update(ctx, user, func(root string) ([]string, string, error) {

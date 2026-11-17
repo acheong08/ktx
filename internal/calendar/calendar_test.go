@@ -203,22 +203,34 @@ func TestMatch(t *testing.T) {
 		wantUID  string
 		wantKind string
 		wantTied int
+		people   []transcript.Participant
 	}{
-		{"starts late, within window", []Occurrence{acme}, at.Add(12 * time.Minute), "", "", "acme", MatchTime, 0},
-		{"too far before", []Occurrence{acme}, at.Add(-20 * time.Minute), "", "", "", "", 0},
-		{"during a long event", []Occurrence{occ("a/x", "workshop", "Workshop", at, 180)}, at.Add(90 * time.Minute), "", "", "workshop", MatchTime, 0},
-		{"guests beat a solo block", []Occurrence{focus, acme}, at, "", "", "acme", MatchTime, 0},
-		{"guests beat a nearer solo block", []Occurrence{occ("a/x", "solo", "Standup", at.Add(2*time.Minute), 10), occ("a/x", "acme", "Acme", at.Add(-3*time.Minute), 30, "j@acme.com")}, at, "", "", "acme", MatchTime, 0},
-		{"nearest start wins", []Occurrence{acme, occ("a/x", "b", "Other", at.Add(10*time.Minute), 30, "x@y.z")}, at.Add(2 * time.Minute), "", "", "acme", MatchTime, 0},
-		{"title breaks a tie", []Occurrence{occ("a/x", "a", "Lunch", at, 30, "x@y.z"), occ("a/x", "b", "Acme intro", at, 30, "q@acme.com")}, at, "", "Acme intro call", "b", MatchTime, 0},
-		{"true tie is no match", []Occurrence{occ("a/x", "a", "Call", at, 30, "x@y.z"), occ("a/x", "b", "Call", at, 30, "q@w.e")}, at, "", "", "", "", 2},
-		{"all-day events never match", []Occurrence{{Calendar: "a/x", UID: "d", Start: at, End: at.Add(24 * time.Hour), AllDay: true}}, at, "", "", "", "", 0},
-		{"granola event id wins", []Occurrence{acme, occ("a/x", "evt123@google.com", "Moved", at.Add(3*time.Hour), 30)}, at, "evt123", "", "evt123@google.com", MatchExact, 0},
-		{"google instance id", []Occurrence{occ("a/x", "evt9@google.com", "Weekly", at.Add(-time.Hour), 30)}, at, "evt9_20261114T170000Z", "", "evt9@google.com", MatchExact, 0},
+		{"starts late, within window", []Occurrence{acme}, at.Add(12 * time.Minute), "", "", "acme", MatchTime, 0, nil},
+		{"too far before", []Occurrence{acme}, at.Add(-20 * time.Minute), "", "", "", "", 0, nil},
+		{"during a long event", []Occurrence{occ("a/x", "workshop", "Workshop", at, 180)}, at.Add(90 * time.Minute), "", "", "workshop", MatchTime, 0, nil},
+		{"guests beat a solo block", []Occurrence{focus, acme}, at, "", "", "acme", MatchTime, 0, nil},
+		{"guests beat a nearer solo block", []Occurrence{occ("a/x", "solo", "Standup", at.Add(2*time.Minute), 10), occ("a/x", "acme", "Acme", at.Add(-3*time.Minute), 30, "j@acme.com")}, at, "", "", "acme", MatchTime, 0, nil},
+		// The Henry case: neither event lists guests; the call (09:20) is during
+		// the meeting named after its participant, 10 minutes before a reminder.
+		{"participant named in the title beats a nearer start", []Occurrence{
+			occ("a/x", "henry", "Meeting between Maxim Iwanskyj and Henry Pulver", at.Add(-20*time.Minute), 30),
+			occ("a/x", "remind", "SEND INVESTOR UPDATES", at.Add(10*time.Minute), 15),
+		}, at, "", "Melzi <> Henry Pulver (Jack and Jill Founding Engineer)", "henry", MatchTime, 0,
+			[]transcript.Participant{{Name: "Maxim Iwanskyj", Email: "maxim@melzi.dev"}, {Name: "Henry Pulver", Email: "henrypulver@hotmail.co.uk"}}},
+		{"participant email among the guests", []Occurrence{
+			occ("a/x", "near", "Sync", at.Add(time.Minute), 30, "x@y.z"),
+			occ("a/x", "acme", "Call", at.Add(-10*time.Minute), 30, "jane@acme.com"),
+		}, at, "", "", "acme", MatchTime, 0, []transcript.Participant{{Email: "Jane@Acme.com"}}},
+		{"nearest start wins", []Occurrence{acme, occ("a/x", "b", "Other", at.Add(10*time.Minute), 30, "x@y.z")}, at.Add(2 * time.Minute), "", "", "acme", MatchTime, 0, nil},
+		{"title breaks a tie", []Occurrence{occ("a/x", "a", "Lunch", at, 30, "x@y.z"), occ("a/x", "b", "Acme intro", at, 30, "q@acme.com")}, at, "", "Acme intro call", "b", MatchTime, 0, nil},
+		{"true tie is no match", []Occurrence{occ("a/x", "a", "Call", at, 30, "x@y.z"), occ("a/x", "b", "Call", at, 30, "q@w.e")}, at, "", "", "", "", 2, nil},
+		{"all-day events never match", []Occurrence{{Calendar: "a/x", UID: "d", Start: at, End: at.Add(24 * time.Hour), AllDay: true}}, at, "", "", "", "", 0, nil},
+		{"granola event id wins", []Occurrence{acme, occ("a/x", "evt123@google.com", "Moved", at.Add(3*time.Hour), 30)}, at, "evt123", "", "evt123@google.com", MatchExact, 0, nil},
+		{"google instance id", []Occurrence{occ("a/x", "evt9@google.com", "Weekly", at.Add(-time.Hour), 30)}, at, "evt9_20261114T170000Z", "", "evt9@google.com", MatchExact, 0, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			o, kind, tied := Match(c.occs, c.start, c.eventID, c.title, "")
+			o, kind, tied := Match(c.occs, c.start, c.eventID, c.title, "", c.people)
 			if o.UID != c.wantUID || kind != c.wantKind || len(tied) != c.wantTied {
 				t.Errorf("got %q %q tied=%d", o.UID, kind, len(tied))
 			}
@@ -228,7 +240,7 @@ func TestMatch(t *testing.T) {
 	// The same event in two calendars counts once, from the recorder's calendar.
 	a, m := acme, acme
 	a.Calendar, a.Owner = "antonio/work", "antonio"
-	if o, kind, _ := Match([]Occurrence{m, a}, at, "", "", "Antonio"); kind != MatchTime || o.Calendar != "antonio/work" {
+	if o, kind, _ := Match([]Occurrence{m, a}, at, "", "", "Antonio", nil); kind != MatchTime || o.Calendar != "antonio/work" {
 		t.Errorf("shared event: %q %q", o.Calendar, kind)
 	}
 }

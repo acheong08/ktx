@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -278,7 +279,7 @@ func (u *UI) eventChoices(e store.Entry) []eventChoice {
 			rid = o.RecurrenceID.Format(time.RFC3339)
 		}
 		out = append(out, eventChoice{
-			Value: o.Calendar + "\n" + o.UID + "\n" + rid, Label: label,
+			Value: url.Values{"cal": {o.Calendar}, "uid": {o.UID}, "rid": {rid}}.Encode(), Label: label,
 			Selected: manual && l.UID == o.UID && linkKey(l.UID, l.RecurrenceID) == linkKey(o.UID, rid),
 		})
 	}
@@ -296,10 +297,13 @@ func (u *UI) setEvent(w http.ResponseWriter, r *http.Request) {
 		case "none":
 			calendar.SetManual(doc, nil)
 		default:
-			parts := strings.Split(choice, "\n")
-			if len(parts) != 3 {
+			// An encoded cal/uid/rid triple: no line breaks, which browsers
+			// would turn into CR LF on submit.
+			q, err := url.ParseQuery(choice)
+			if err != nil || q.Get("cal") == "" || q.Get("uid") == "" {
 				return errBadChoice
 			}
+			parts := []string{q.Get("cal"), q.Get("uid"), q.Get("rid")}
 			cals, err := calendar.ListCalendars(root)
 			if err != nil {
 				return err

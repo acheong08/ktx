@@ -122,13 +122,14 @@ func (l Link) Is(o Occurrence) bool {
 //     occurrence nearest the call.
 //  2. Otherwise events (not all-day) the call started within Window of, or
 //     during. One with guests beats one without (a call has someone else in
-//     it); then the nearest start; then the title closest to the call's. A
-//     tie on all three is no match.
+//     it); then the one with more of the call's own participants (by email
+//     among its guests, or full name in its title); then the nearest start;
+//     then the title closest to the call's. A tie on all of them is no match.
 //
 // The same event in several people's calendars counts once, preferring the
 // calendar of preferOwner. It returns the match (kind "" for none) and, when
 // there was a tie, the tied candidates.
-func Match(occs []Occurrence, start time.Time, eventID, title, preferOwner string) (Occurrence, string, []Occurrence) {
+func Match(occs []Occurrence, start time.Time, eventID, title, preferOwner string, people []transcript.Participant) (Occurrence, string, []Occurrence) {
 	occs = dedupe(occs, strings.ToLower(preferOwner))
 
 	if eventID != "" {
@@ -152,10 +153,11 @@ func Match(occs []Occurrence, start time.Time, eventID, title, preferOwner strin
 	}
 
 	type scored struct {
-		o      Occurrence
-		diff   time.Duration
-		guests bool
-		sim    float64
+		o       Occurrence
+		diff    time.Duration
+		guests  bool
+		overlap int
+		sim     float64
 	}
 	var cands []scored
 	for _, o := range occs {
@@ -170,7 +172,7 @@ func Match(occs []Occurrence, start time.Time, eventID, title, preferOwner strin
 		if during && diff > Window {
 			diff = Window // started during a long event: rank after near starts
 		}
-		cands = append(cands, scored{o, diff.Round(time.Minute), len(o.Guests()) > 0, similarity(title, o.Summary)})
+		cands = append(cands, scored{o, diff.Round(time.Minute), len(o.Guests()) > 0, overlap(people, o), similarity(title, o.Summary)})
 	}
 	if len(cands) == 0 {
 		return Occurrence{}, "", nil
@@ -180,6 +182,9 @@ func Match(occs []Occurrence, start time.Time, eventID, title, preferOwner strin
 		if a.guests != b.guests { // a call has someone else in it
 			return a.guests
 		}
+		if a.overlap != b.overlap {
+			return a.overlap > b.overlap
+		}
 		if a.diff != b.diff {
 			return a.diff < b.diff
 		}
@@ -187,10 +192,13 @@ func Match(occs []Occurrence, start time.Time, eventID, title, preferOwner strin
 	})
 	if len(cands) > 1 {
 		a, b := cands[0], cands[1]
-		if a.diff == b.diff && a.guests == b.guests && math.Abs(a.sim-b.sim) < 1e-9 {
+		same := func(x, y scored) bool {
+			return x.diff == y.diff && x.guests == y.guests && x.overlap == y.overlap && math.Abs(x.sim-y.sim) < 1e-9
+		}
+		if same(a, b) {
 			var tied []Occurrence
 			for _, c := range cands {
-				if c.diff == a.diff && c.guests == a.guests && math.Abs(c.sim-a.sim) < 1e-9 {
+				if same(c, a) {
 					tied = append(tied, c.o)
 				}
 			}
@@ -198,6 +206,44 @@ func Match(occs []Occurrence, start time.Time, eventID, title, preferOwner strin
 		}
 	}
 	return cands[0].o, MatchTime, nil
+}
+
+// overlap counts the call's participants who are in the event: their email
+// among its organizer and guests, or their full name in its title.
+// Participants that came from a calendar link don't count.
+func overlap(people []transcript.Participant, o Occurrence) int {
+	emails := map[string]bool{}
+	for _, a := range o.People() {
+		if a.Email != "" {
+			emails[a.Email] = true
+		}
+	}
+	title := words(o.Summary)
+	n := 0
+	for _, p := range people {
+		if p.From == FromCalendar {
+			continue
+		}
+		if e := strings.ToLower(strings.TrimSpace(p.Email)); e != "" && emails[e] {
+			n++
+			continue
+		}
+		name := words(p.Name)
+		if len(name) < 2 {
+			continue // a first name alone is too weak
+		}
+		all := true
+		for w := range name {
+			if !title[w] {
+				all = false
+				break
+			}
+		}
+		if all {
+			n++
+		}
+	}
+	return n
 }
 
 // dedupe keeps one copy of each occurrence (same UID and occurrence),
@@ -341,7 +387,7 @@ func (l Linker) Link(root string, doc, prev *transcript.Doc) (bool, error) {
 		if owner == "" {
 			owner = doc.Field("uploaded_by")
 		}
-		o, kind, _ := Match(occs, doc.Start, doc.Field("calendar_event_id"), doc.Meta.Title, owner)
+		o, kind, _ := Match(occs, doc.Start, doc.Field("calendar_event_id"), doc.Meta.Title, owner, doc.Meta.Participants)
 		if kind == "" {
 			doc.Unset(LinkKey)
 			setPeople(doc, nil)
