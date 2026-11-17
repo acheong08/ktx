@@ -25,3 +25,8 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   e.target.dispatchEvent(new Event("change", { bubbles: true }));
 });
+
+// New transcript form: default the time zone to the browser's.
+document.querySelectorAll("[data-default-timezone]").forEach((el) => {
+  if (!el.value) el.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+});

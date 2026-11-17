@@ -341,6 +341,80 @@ func (s *Store) SetType(ctx context.Context, id, typ, user string) (PutResult, e
 	return out, err
 }
 
+// Edit changes a stored transcript with apply and writes it back in one
+// commit, moving or renaming the file if its type, date or title changed.
+// It keeps the transcript's id and every metadata key apply doesn't touch.
+// A result that breaks the upload rules is refused with a
+// *transcript.ValidationError and nothing is written.
+func (s *Store) Edit(ctx context.Context, id, user string, apply func(doc *transcript.Doc) error) (PutResult, error) {
+	var out PutResult
+	res, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
+		existing, err := findByID(root, id)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		if existing == "" {
+			return gitrepo.Change{}, ErrNotFound
+		}
+		old, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(existing)))
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		doc, _, err := transcript.ParseStored(old)
+		if err != nil {
+			return gitrepo.Change{}, fmt.Errorf("%s: %w", existing, err)
+		}
+		if err := apply(doc); err != nil {
+			return gitrepo.Change{}, err
+		}
+		doc.Set("id", id)
+		content, err := doc.Render()
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		fresh, problems, err := transcript.ParseStored(content)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		if len(problems) > 0 {
+			return gitrepo.Change{}, &transcript.ValidationError{Problems: problems}
+		}
+		// The type key always matches the folder (and "unsorted" means none).
+		if fresh.Meta.Type != "" {
+			doc.Set("type", fresh.Meta.Type)
+		} else {
+			doc.Unset("type")
+		}
+		if content, err = doc.Render(); err != nil {
+			return gitrepo.Change{}, err
+		}
+		fresh.ID = id
+
+		rel := path.Join(folderDir(fresh.Meta.Type), fresh.FileName())
+		out.Path = rel
+		if rel == existing && bytes.Equal(old, content) {
+			out.Result = ResultUnchanged
+			return gitrepo.Change{}, nil
+		}
+		out.Result = ResultUpdated
+		ch := gitrepo.Change{Paths: []string{rel},
+			Message: commitMessage("Edit transcript", fresh.Label(), fresh.Start, id, "Changed-By: "+user)}
+		if err := writeFile(root, rel, content); err != nil {
+			return ch, err
+		}
+		if rel != existing {
+			ch.Paths = append(ch.Paths, existing)
+			out.PreviousPath = existing
+			if err := os.Remove(filepath.Join(root, filepath.FromSlash(existing))); err != nil {
+				return ch, err
+			}
+		}
+		return ch, nil
+	})
+	out.Git = res
+	return out, err
+}
+
 // List reads every transcript, newest first.
 func (s *Store) List() ([]Entry, error) {
 	var entries []Entry

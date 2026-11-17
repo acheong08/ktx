@@ -283,17 +283,96 @@ func (d *Doc) validate() []string {
 // Set sets a top-level metadata key to a string value, keeping its position
 // if it already exists.
 func (d *Doc) Set(key, value string) {
+	d.setNode(key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+}
+
+// SetValue sets a top-level metadata key to any YAML-encodable value (a
+// list of participants, tags, a number), keeping its position.
+func (d *Doc) SetValue(key string, v any) error {
+	var n yaml.Node
+	if err := n.Encode(v); err != nil {
+		return err
+	}
+	d.setNode(key, &n)
+	return nil
+}
+
+func (d *Doc) setNode(key string, value *yaml.Node) {
 	m := d.node
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == key {
-			m.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+			m.Content[i+1] = value
 			return
 		}
 	}
-	m.Content = append(m.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
-	)
+	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+}
+
+// New returns an empty document with a metadata block, to be filled with
+// Set/SetValue and a Body.
+func New() *Doc {
+	return &Doc{node: &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}}
+}
+
+// ParticipantLine formats a participant for editing as one line:
+//
+//	Jane Doe <jane@acme.com> | Acme | CTO
+func ParticipantLine(p Participant) string {
+	s := p.Name
+	switch {
+	case p.Email != "" && p.Name != "":
+		s = (&mail.Address{Name: p.Name, Address: p.Email}).String()
+		if !strings.ContainsAny(p.Name, `"<>()[]:;@\,.`) {
+			s = p.Name + " <" + p.Email + ">" // without the quoting mail.Address adds for non-ASCII
+		}
+	case p.Email != "":
+		s = p.Email
+	}
+	if p.Company != "" || p.Role != "" {
+		s += " | " + p.Company
+	}
+	if p.Role != "" {
+		s += " | " + p.Role
+	}
+	return s
+}
+
+// ParseParticipantLines reads one participant per line, in the format of
+// ParticipantLine. Company and role are optional; so is the email.
+func ParseParticipantLines(text string) ([]Participant, []string) {
+	var out []Participant
+	var problems []string
+	for i, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		who := strings.TrimSpace(parts[0])
+		var p Participant
+		if strings.Contains(who, "@") {
+			a, err := mail.ParseAddress(who)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("participant line %d (%q): write it as Name <email>", i+1, line))
+				continue
+			}
+			p.Name, p.Email = a.Name, strings.ToLower(a.Address)
+		} else {
+			p.Name = who
+		}
+		if len(parts) > 1 {
+			p.Company = strings.TrimSpace(parts[1])
+		}
+		if len(parts) > 2 {
+			p.Role = strings.TrimSpace(strings.Join(parts[2:], "|"))
+		}
+		if p.Name == "" && p.Email == "" {
+			problems = append(problems, fmt.Sprintf("participant line %d needs a name or an email", i+1))
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, problems
 }
 
 // Unset removes a top-level metadata key.

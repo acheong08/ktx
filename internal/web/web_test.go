@@ -123,15 +123,18 @@ func TestUIFlow(t *testing.T) {
 		t.Errorf("detail: %d\n%s", code, body)
 	}
 
-	// Plain form: invalid type shows an error, valid "save and next" goes to the next unsorted.
-	code, body, _ = e.do(t, "POST", "/transcripts/"+id+"/type", url.Values{"type": {"bad type"}, "then": {"stay"}})
+	// Plain form: invalid type shows an error; a valid one saves and stays on the page.
+	code, body, _ = e.do(t, "POST", "/transcripts/"+id+"/type", url.Values{"type": {"bad type"}})
 	if code != http.StatusUnprocessableEntity || !strings.Contains(body, "Not saved") {
 		t.Errorf("invalid type: %d", code)
 	}
+	if strings.Contains(body, "Save and next") {
+		t.Error("save-and-next button still shown")
+	}
 	e.client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	_, _, resp = e.do(t, "POST", "/transcripts/"+id+"/type", url.Values{"type": {"investor"}, "then": {"next"}})
-	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "/transcripts/") || strings.Contains(loc, id) {
-		t.Errorf("next unsorted redirect = %q", loc)
+	_, _, resp = e.do(t, "POST", "/transcripts/"+id+"/type", url.Values{"type": {"investor"}})
+	if loc := resp.Header.Get("Location"); loc != "/transcripts/"+id+"?saved=1" {
+		t.Errorf("redirect after type change = %q", loc)
 	}
 	if code, _, _ := e.do(t, "GET", "/transcripts/000000000000", nil); code != http.StatusNotFound {
 		t.Errorf("missing transcript: %d", code)
@@ -160,4 +163,83 @@ func TestActor(t *testing.T) {
 			t.Errorf("actor(%s, %q) = %q, want %q", c.remote, c.xff, got, c.want)
 		}
 	}
+}
+
+func TestEditAndNewTranscript(t *testing.T) {
+	e := setup(t)
+	id := put(t, e.st, "---\ntitle: Acme intro\ndate: 2026-11-14T10:00:00-08:00\ntimezone: America/Los_Angeles\nparticipants: [{name: Jane Doe, email: jane@acme.com, company: Acme, role: CTO}]\nsource: granola\nsource_id: a\ngranola_url: https://notes.granola.ai/d/x\n---\nOld notes.\n")
+
+	// The edit form is filled in from the file.
+	_, body, _ := e.do(t, "GET", "/transcripts/"+id+"/edit", nil)
+	for _, want := range []string{`value="Acme intro"`, `value="2026-11-14T10:00"`, `value="America/Los_Angeles"`, "Jane Doe &lt;jane@acme.com&gt; | Acme | CTO", "Old notes.", "Synced from granola"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("edit form lacks %q", want)
+		}
+	}
+
+	form := url.Values{
+		"title": {"Acme discovery"}, "date": {"2026-11-14T11:30"}, "timezone": {"Europe/London"}, "duration": {"45"},
+		"type": {"customer_discovery"}, "participants": {"Jane Doe <jane@acme.com> | Acme | CTO\r\nBob"},
+		"tags": {"pricing, infra"}, "body": {"New notes.\r\nSecond line."},
+	}
+	e.client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	_, _, resp := e.do(t, "POST", "/transcripts/"+id, form, "X-Forwarded-For", "100.64.0.3")
+	if loc := resp.Header.Get("Location"); loc != "/transcripts/"+id+"?saved=updated" {
+		t.Fatalf("redirect = %q", loc)
+	}
+	path := gitShowPath(t, e.remote, "transcripts/customer_discovery/2026-11-14-1130-acme-discovery-"+id+".md")
+	for _, want := range []string{"title: Acme discovery", `date: "2026-11-14T11:30:00Z"`, "timezone: Europe/London", "duration_minutes: 45", "type: customer_discovery", "name: Bob", "- pricing", "granola_url: https://notes.granola.ai/d/x", "source_id: a", "New notes.\nSecond line.\n"} {
+		if !strings.Contains(path, want) {
+			t.Errorf("edited file lacks %q:\n%s", want, path)
+		}
+	}
+	if msg := gitLog(t, e.remote); !strings.Contains(msg, "Edit transcript: Acme discovery") || !strings.Contains(msg, "Changed-By: web UI (100.64.0.3)") {
+		t.Errorf("commit:\n%s", msg)
+	}
+
+	// Problems are listed and what was typed is kept.
+	bad := url.Values{"title": {""}, "date": {""}, "timezone": {"Mars/Base"}, "participants": {"x@ <y"}, "body": {"keep me"}}
+	code, body, _ := e.do(t, "POST", "/transcripts/"+id, bad)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(body, "Title is required") || !strings.Contains(body, "IANA") || !strings.Contains(body, "participant line 1") || !strings.Contains(body, "keep me") {
+		t.Errorf("invalid edit: %d\n%s", code, body)
+	}
+
+	// A pasted transcript.
+	_, body, _ = e.do(t, "GET", "/transcripts/new", nil)
+	if !strings.Contains(body, "data-default-timezone") || !strings.Contains(body, "New transcript") {
+		t.Error("new form")
+	}
+	create := url.Values{"title": {"Call with Priya"}, "date": {"2026-11-16T09:00"}, "timezone": {"America/Los_Angeles"},
+		"type": {""}, "participants": {"Priya Shah <priya@angel.vc>"}, "body": {"**Priya:** Charge more."}}
+	_, _, resp = e.do(t, "POST", "/transcripts", create, "X-Forwarded-For", "100.64.0.3")
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/transcripts/") || !strings.HasSuffix(loc, "?saved=created") {
+		t.Fatalf("create redirect = %q", loc)
+	}
+	newID := strings.TrimSuffix(strings.TrimPrefix(loc, "/transcripts/"), "?saved=created")
+	file := gitShowPath(t, e.remote, "transcripts/unsorted/2026-11-16-0900-call-with-priya-"+newID+".md")
+	for _, want := range []string{"source: manual", "source_id: ", "uploaded_by: web UI (100.64.0.3)", "**Priya:** Charge more."} {
+		if !strings.Contains(file, want) {
+			t.Errorf("new file lacks %q:\n%s", want, file)
+		}
+	}
+	if code, _, _ := e.do(t, "POST", "/transcripts", url.Values{"title": {"x"}}); code != http.StatusUnprocessableEntity {
+		t.Errorf("incomplete new transcript: %d", code)
+	}
+}
+
+func gitShowPath(t *testing.T, remote, path string) string {
+	t.Helper()
+	out, err := exec.Command("git", "--git-dir", remote, "show", "main:"+path).CombinedOutput()
+	if err != nil {
+		tree, _ := exec.Command("git", "--git-dir", remote, "ls-tree", "-r", "--name-only", "main").CombinedOutput()
+		t.Fatalf("%s not in the repository:\n%s", path, tree)
+	}
+	return string(out)
+}
+
+func gitLog(t *testing.T, remote string) string {
+	t.Helper()
+	out, _ := exec.Command("git", "--git-dir", remote, "log", "-1", "--format=%B", "main").CombinedOutput()
+	return string(out)
 }

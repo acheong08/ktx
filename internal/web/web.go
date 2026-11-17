@@ -110,8 +110,11 @@ func (u *UI) Handler() http.Handler {
 	}
 
 	mux.HandleFunc("GET /{$}", u.page(u.list))
-	mux.HandleFunc("GET /sort", u.page(u.sortNext))
+	mux.HandleFunc("GET /transcripts/new", u.page(u.newTranscript))
+	mux.HandleFunc("POST /transcripts", u.page(u.createTranscript))
 	mux.HandleFunc("GET /transcripts/{id}", u.page(u.detail))
+	mux.HandleFunc("GET /transcripts/{id}/edit", u.page(u.editTranscript))
+	mux.HandleFunc("POST /transcripts/{id}", u.page(u.saveTranscript))
 	mux.HandleFunc("POST /transcripts/{id}/type", u.page(u.setType))
 
 	if u.auth != nil && u.db != nil {
@@ -248,14 +251,13 @@ type tab struct {
 }
 
 type listView struct {
-	Chrome        chrome
-	Q, Sort       string
-	Folder        string // "" = all
-	Tabs          []tab
-	Entries       []store.Entry
-	Types         []string
-	UnsortedCount int
-	Flash         flash
+	Chrome  chrome
+	Q, Sort string
+	Folder  string // "" = all
+	Tabs    []tab
+	Entries []store.Entry
+	Types   []string
+	Flash   flash
 }
 
 type option struct{ Value, Label string }
@@ -295,11 +297,6 @@ func (u *UI) listView(r *http.Request, q, folder, sortBy string) (listView, erro
 		counts[e.Folder]++
 		if folder == "" || e.Folder == folder {
 			matching = append(matching, e)
-		}
-	}
-	for _, e := range entries {
-		if e.Folder == transcript.Unsorted {
-			v.UnsortedCount++
 		}
 	}
 
@@ -382,8 +379,14 @@ type detailView struct {
 
 func (u *UI) detail(w http.ResponseWriter, r *http.Request) {
 	var fl flash
-	if r.URL.Query().Get("saved") != "" {
-		fl = flash{"ok", "Saved."}
+	switch r.URL.Query().Get("saved") {
+	case "":
+	case "created":
+		fl = flash{"ok", "Added, committed and pushed."}
+	case "unchanged":
+		fl = flash{"ok", "Nothing had changed."}
+	default:
+		fl = flash{"ok", "Saved, committed and pushed."}
 	}
 	u.renderDetail(w, r, http.StatusOK, r.PathValue("id"), fl)
 }
@@ -454,35 +457,7 @@ func (u *UI) setType(w http.ResponseWriter, r *http.Request) {
 		u.renderDetail(w, r, http.StatusUnprocessableEntity, id, fl)
 		return
 	}
-	if r.PostFormValue("then") == "next" {
-		u.redirectNextUnsorted(w, r, id)
-		return
-	}
 	http.Redirect(w, r, "/transcripts/"+id+"?saved=1", http.StatusSeeOther)
-}
-
-func (u *UI) sortNext(w http.ResponseWriter, r *http.Request) { u.redirectNextUnsorted(w, r, "") }
-
-// redirectNextUnsorted goes to the oldest unsorted transcript other than
-// skip, or to the (empty) unsorted list.
-func (u *UI) redirectNextUnsorted(w http.ResponseWriter, r *http.Request, skip string) {
-	entries, err := u.store.List()
-	if err != nil {
-		u.fail(w, r, err)
-		return
-	}
-	var next *store.Entry
-	for i := range entries {
-		e := &entries[i]
-		if e.Folder == transcript.Unsorted && e.ID != "" && e.ID != skip && (next == nil || e.Start.Before(next.Start)) {
-			next = e
-		}
-	}
-	if next == nil {
-		http.Redirect(w, r, listURL("", transcript.Unsorted, ""), http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/transcripts/"+next.ID, http.StatusSeeOther)
 }
 
 // --- helpers ---------------------------------------------------------------

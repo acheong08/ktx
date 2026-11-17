@@ -220,3 +220,51 @@ func TestNormalizeType(t *testing.T) {
 		t.Error("want error for path-like type")
 	}
 }
+
+func TestParticipantLines(t *testing.T) {
+	text := "Jane Doe <Jane@Acme.com> | Acme | CTO\n\n  Bob  \nsam@x.io | | Advisor\nJosé Müller <jose@b.de>\n"
+	ps, problems := ParseParticipantLines(text)
+	if len(problems) != 0 || len(ps) != 4 {
+		t.Fatalf("%+v %v", ps, problems)
+	}
+	if ps[0] != (Participant{Name: "Jane Doe", Email: "jane@acme.com", Company: "Acme", Role: "CTO"}) || ps[1].Name != "Bob" || ps[2].Email != "sam@x.io" || ps[2].Role != "Advisor" || ps[3].Name != "José Müller" {
+		t.Errorf("parsed: %+v", ps)
+	}
+	// Round trip.
+	var lines []string
+	for _, p := range ps {
+		lines = append(lines, ParticipantLine(p))
+	}
+	again, _ := ParseParticipantLines(strings.Join(lines, "\n"))
+	for i := range ps {
+		if again[i] != ps[i] {
+			t.Errorf("round trip %d: %+v != %+v (line %q)", i, again[i], ps[i], lines[i])
+		}
+	}
+	if _, problems := ParseParticipantLines("bad@ <x\n | Acme"); len(problems) != 2 {
+		t.Errorf("problems: %v", problems)
+	}
+}
+
+func TestNewAndSetValue(t *testing.T) {
+	d := New()
+	d.Set("title", "Hello")
+	d.Set("date", "2026-11-16T10:00:00-08:00")
+	if err := d.SetValue("participants", []Participant{{Name: "Jane", Email: "jane@a.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	d.SetValue("tags", []string{"a", "b"})
+	d.SetValue("tags", []string{"c"}) // replaces in place
+	d.Body = "Body.\n"
+	out, err := d.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got.Meta.Title != "Hello" || got.Meta.Participants[0].Email != "jane@a.com" || len(got.Meta.Tags) != 1 || got.Meta.Tags[0] != "c" {
+		t.Errorf("%+v\n%s", got.Meta, out)
+	}
+}

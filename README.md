@@ -105,7 +105,8 @@ No auth. Returns `{"ok":true}`.
   - Type a type into a row's field and press Enter (or leave the field). The file moves to `transcripts/<type>/`, `type:` is updated in its front matter, and the change is committed (`Changed-By: <you>`) and pushed. Leave the field empty or type `unsorted` to move it back.
 - **Transcript** (`/transcripts/<id>`):
   - Shows the metadata and the body rendered as Markdown. Raw HTML in transcripts is escaped.
-  - **Save and next unsorted →** saves and jumps to the oldest remaining unsorted transcript, so you can work through the backlog. `/sort` starts there.
+  - **Edit** opens a form for the title, date and time zone, duration, type, participants, tags and the transcript itself (Markdown). Saving commits it (`Edit transcript: …`, `Changed-By:`), moving or renaming the file if the type, date or title changed. Keys the form doesn't show (`source_id`, links, `ingested_at`) are kept. Edits to a Granola or Pocket transcript last until the original changes there; the next sync then replaces them, and git keeps both.
+- **New transcript** (on the list): paste a transcript or notes and fill in the same fields. It's stored with `source: manual` and a random `source_id`, filed under its type (or unsorted).
 - **Type suggestions:** `BRAIN_TRANSCRIPT_TYPES` plus every folder that already exists. Any new name matching `[a-z0-9_-]` creates a folder.
 - **Built with** [templ](https://templ.guide) components and [htmx 4](https://four.htmx.org). htmx is vendored in `internal/web/static`, so the page loads nothing from a CDN.
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -191,5 +192,57 @@ func TestPutBatchDefaultType(t *testing.T) {
 	}
 	if _, _, err := s.PutBatch(ctx, []Item{{Doc: items[0].Doc, DefaultType: "../x"}}, "a", ""); err == nil {
 		t.Error("bad default type accepted")
+	}
+}
+
+func TestEdit(t *testing.T) {
+	s, remote := newStore(t)
+	ctx := context.Background()
+	ra := put(t, s, a) // Acme intro, unsorted, granola source
+	id := strings.TrimSuffix(ra.Path[strings.LastIndex(ra.Path, "-")+1:], ".md")
+
+	res, err := s.Edit(ctx, id, "maxim", func(d *transcript.Doc) error {
+		d.Set("title", "Acme discovery call")
+		d.Set("type", "Customer_Discovery")
+		d.Body = "Corrected notes.\n"
+		return d.SetValue("participants", []transcript.Participant{{Name: "Jane Doe", Email: "jane@acme.com", Role: "CTO"}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Result != ResultUpdated || res.PreviousPath != ra.Path || !strings.HasPrefix(res.Path, "transcripts/customer_discovery/2026-11-14-1000-acme-discovery-call-"+id) {
+		t.Fatalf("res = %+v", res)
+	}
+	file := gitOut(t, "--git-dir", remote, "show", "main:"+res.Path)
+	for _, want := range []string{"title: Acme discovery call", "type: customer_discovery", "role: CTO", "source_id: a", "id: " + id, "ingested_at:", "Corrected notes."} {
+		if !strings.Contains(file, want) {
+			t.Errorf("file lacks %q:\n%s", want, file)
+		}
+	}
+	if strings.Contains(file, "tenant isolation") {
+		t.Error("old body kept")
+	}
+	msg := gitOut(t, "--git-dir", remote, "log", "-1", "--format=%B", "main")
+	if !strings.HasPrefix(msg, "Edit transcript: Acme discovery call (2026-11-14)") || !strings.Contains(msg, "Changed-By: maxim") {
+		t.Errorf("message:\n%s", msg)
+	}
+	if n := gitOut(t, "--git-dir", remote, "rev-list", "--count", "main"); n != "2" {
+		t.Errorf("commits = %s", n)
+	}
+
+	// Nothing changed: no commit. Breaking the rules: refused, nothing written.
+	if res, err := s.Edit(ctx, id, "maxim", func(d *transcript.Doc) error { return nil }); err != nil || res.Result != ResultUnchanged {
+		t.Errorf("no-op edit: %+v %v", res, err)
+	}
+	_, err = s.Edit(ctx, id, "maxim", func(d *transcript.Doc) error { d.Body = " \n"; d.Unset("participants"); return nil })
+	var verr *transcript.ValidationError
+	if !errors.As(err, &verr) || len(verr.Problems) != 2 {
+		t.Errorf("invalid edit: %v", err)
+	}
+	if n := gitOut(t, "--git-dir", remote, "rev-list", "--count", "main"); n != "2" {
+		t.Errorf("invalid edit committed something: %s commits", n)
+	}
+	if _, err := s.Edit(ctx, "000000000000", "maxim", func(*transcript.Doc) error { return nil }); err != ErrNotFound {
+		t.Errorf("missing: %v", err)
 	}
 }

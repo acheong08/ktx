@@ -93,9 +93,7 @@ templ results(v listView) {
 				{ t.Label } <span class="count">{ strconv.Itoa(t.Count) }</span>
 			</a>
 		}
-		if v.UnsortedCount > 0 {
-			<a class="button sort-next" href="/sort">Sort { strconv.Itoa(v.UnsortedCount) } unsorted →</a>
-		}
+		<a class="button sort-next" href="/transcripts/new">New transcript</a>
 	</nav>
 	@typeDatalist(v.Types)
 	if len(v.Entries) == 0 {
@@ -167,13 +165,15 @@ templ detailPage(v detailView) {
 				</div>
 			}
 			if v.Entry.ID != "" {
-				<form class="retype" method="post" action={ templ.URL("/transcripts/" + v.Entry.ID + "/type") }>
-					<label for="type">Type</label>
-					<input id="type" type="text" name="type" list="type-options" value={ typeValue(v.Entry) } placeholder="unsorted" autocomplete="off"/>
-					@typeDatalist(v.Types)
-					<button type="submit" name="then" value="stay">Save</button>
-					<button type="submit" name="then" value="next" class="primary">Save and next unsorted →</button>
-				</form>
+				<div class="retype">
+					<form method="post" action={ templ.URL("/transcripts/" + v.Entry.ID + "/type") }>
+						<label for="type">Type</label>
+						<input id="type" type="text" name="type" list="type-options" value={ typeValue(v.Entry) } placeholder="unsorted" autocomplete="off"/>
+						@typeDatalist(v.Types)
+						<button type="submit">Save</button>
+					</form>
+					<a class="button" href={ templ.URL("/transcripts/" + v.Entry.ID + "/edit") }>Edit</a>
+				</div>
 			}
 			<dl class="meta">
 				<dt>When</dt>
@@ -248,5 +248,70 @@ templ signedOutPage(c chrome) {
 			<p>You're signed out of ktx. You may still be signed in to the identity provider.</p>
 			<p><a class="button primary" href="/auth/login">Sign in again</a></p>
 		</section>
+	}
+}
+
+templ transcriptForm(v formView) {
+	@layout(formTitle(v), v.Chrome) {
+		if v.ID != "" {
+			<p class="back"><a href={ templ.URL("/transcripts/" + v.ID) }>← Back without saving</a></p>
+		} else {
+			<p class="back"><a href="/">← Transcripts</a></p>
+		}
+		<h1>{ formTitle(v) }</h1>
+		if v.Source != "" && v.Source != "manual" {
+			<p class="flash warn">Synced from { v.Source }. If the original changes there, the next sync replaces your edits here (git keeps both versions).</p>
+		}
+		if len(v.Problems) > 0 {
+			<div class="flash error" role="alert">
+				<ul>
+					for _, p := range v.Problems {
+						<li>{ p }</li>
+					}
+				</ul>
+			</div>
+		}
+		<form method="post" class="settings wide" action={ formURL(v) }>
+			<label for="title">Title</label>
+			<input id="title" name="title" type="text" value={ v.Title } required placeholder="Intro call with Acme"/>
+			<div class="row">
+				<div>
+					<label for="date">Date and time</label>
+					<input id="date" name="date" type="datetime-local" value={ v.Date } required/>
+				</div>
+				<div>
+					<label for="timezone">Time zone</label>
+					<input id="timezone" name="timezone" type="text" value={ v.Timezone } list="zones" required placeholder="America/Los_Angeles" autocomplete="off" if v.NewForm { data-default-timezone }/>
+					<datalist id="zones">
+						for _, z := range commonZones {
+							<option value={ z }></option>
+						}
+					</datalist>
+				</div>
+				<div>
+					<label for="duration">Duration (min)</label>
+					<input id="duration" name="duration" type="number" min="0" value={ v.Duration }/>
+				</div>
+				<div>
+					<label for="ftype">Type</label>
+					<input id="ftype" name="type" type="text" list="type-options" value={ v.Type } placeholder="unsorted" autocomplete="off"/>
+					@typeDatalist(v.Types)
+				</div>
+			</div>
+			<label for="participants">Participants</label>
+			<textarea id="participants" name="participants" rows="4" spellcheck="false" placeholder="Jane Doe <jane@acme.com> | Acme | CTO">{ v.Participants }</textarea>
+			<p class="help">One per line: <code>Name &lt;email&gt; | Company | Role</code>. Email, company and role are optional.</p>
+			<label for="tags">Tags</label>
+			<input id="tags" name="tags" type="text" value={ v.Tags } placeholder="pricing, multi-tenant"/>
+			<label for="body">Transcript or notes (Markdown)</label>
+			<textarea id="body" name="body" rows="24" class="mono" required>{ v.Body }</textarea>
+			<button type="submit" class="primary">
+				if v.ID == "" {
+					Add transcript
+				} else {
+					Save
+				}
+			</button>
+		</form>
 	}
 }
