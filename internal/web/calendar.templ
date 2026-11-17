@@ -49,7 +49,16 @@ templ calendarPage(v calendarView) {
 			<tbody>
 				for _, c := range v.Calendars {
 					<tr>
-						<td data-label="Calendar">{ c.Cal.Title() }</td>
+						<td data-label="Calendar">
+							if c.Mine {
+								<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID) } class="rename">
+									<input type="text" name="name" value={ c.Cal.Title() } aria-label={ "Name of " + c.Cal.ID } maxlength="200" required/>
+									<button type="submit">Rename</button>
+								</form>
+							} else {
+								{ c.Cal.Title() }
+							}
+						</td>
 						<td data-label="Owner">
 							{ c.Cal.Owner }
 							if !c.Mine {

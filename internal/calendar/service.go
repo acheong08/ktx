@@ -132,6 +132,21 @@ func (s *Service) CreateCalendar(ctx context.Context, c Calendar, user string) e
 	return err
 }
 
+// UpdateCalendar changes a calendar's name, colour or description. Its id,
+// and so its path, never change.
+func (s *Service) UpdateCalendar(ctx context.Context, c Calendar, user string) error {
+	_, err := s.update(ctx, user, func(root string) ([]string, string, error) {
+		old, _ := GetCalendar(root, c.Owner, c.ID)
+		paths, err := UpdateCalendar(root, c)
+		subject := "Calendar: update " + c.Key()
+		if name := strings.TrimSpace(c.Name); name != "" && name != old.Name {
+			subject = fmt.Sprintf("Calendar: rename %s to %q", c.Key(), name)
+		}
+		return paths, subject, err
+	})
+	return err
+}
+
 // EnsureCalendar creates owner's calendar id if they have no calendar yet.
 func (s *Service) EnsureCalendar(ctx context.Context, owner, id, name string) error {
 	cals, err := s.Calendars()

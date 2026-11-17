@@ -157,6 +157,39 @@ func (u *UI) createCalendar(w http.ResponseWriter, r *http.Request) {
 	u.render(w, r, http.StatusUnprocessableEntity, calendarPage(v))
 }
 
+// renameCalendar changes the display name of one of your calendars. Its id,
+// and so its CalDAV path, stay the same.
+func (u *UI) renameCalendar(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	c, err := u.cal.Calendar(calendarOwner(user), r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	old := c.Title()
+	c.Name = strings.TrimSpace(r.PostFormValue("name"))
+	err = u.cal.UpdateCalendar(r.Context(), c, actor(r))
+	v, verr := u.calendarView(r)
+	if verr != nil {
+		u.fail(w, r, verr)
+		return
+	}
+	status := http.StatusOK
+	switch {
+	case errors.Is(err, calendar.ErrInvalid):
+		v.Flash, status = flash{"error", err.Error()}, http.StatusUnprocessableEntity
+	case err != nil:
+		u.fail(w, r, err)
+		return
+	case c.Name == "" || c.Name == old:
+		v.Flash = flash{"ok", "Nothing changed."}
+	default:
+		v.Flash = flash{"ok", "Renamed “" + old + "” to “" + c.Name + "”. The path stays " + davPath(v.Owner, c.Owner, c.ID) + "; apps show the new name on their next refresh."}
+	}
+	u.render(w, r, status, calendarPage(v))
+}
+
 func (u *UI) importCalendar(w http.ResponseWriter, r *http.Request) {
 	user, _ := currentUser(r)
 	r.Body = http.MaxBytesReader(w, r.Body, maxICSBytes+1<<20)

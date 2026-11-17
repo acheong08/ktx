@@ -129,6 +129,7 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("GET /settings/calendar", u.page(u.calendarPage))
 		mux.HandleFunc("POST /settings/calendar", u.page(u.createCalendar))
 		mux.HandleFunc("POST /settings/calendar/import", u.page(u.importCalendar))
+		mux.HandleFunc("POST /settings/calendar/{id}", u.page(u.renameCalendar))
 	}
 
 	if u.auth != nil && u.db != nil {

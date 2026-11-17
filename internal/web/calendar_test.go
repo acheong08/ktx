@@ -134,3 +134,27 @@ func TestCalendarUI(t *testing.T) {
 		t.Error("calendar token works for the API")
 	}
 }
+
+func TestRenameCalendar(t *testing.T) {
+	e := setupAuth(t)
+	ant, max := e.browser(), e.browser()
+	e.signIn(t, ant, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi"}}, "/")
+	e.signIn(t, max, idpUser{sub: "u2", username: "maxim", groups: []string{"melzi"}}, "/")
+	ant.do(t, "GET", "/settings/calendar", nil)
+	code, body, _ := ant.do(t, "POST", "/settings/calendar/personal", url.Values{"name": {"Work"}})
+	if code != 200 || !strings.Contains(body, "Renamed “Personal” to “Work”") || !strings.Contains(body, "/dav/antonio/calendars/personal/") {
+		t.Fatalf("rename: %d\n%s", code, body)
+	}
+	if c, _ := e.cal.Calendar("antonio", "personal"); c.Name != "Work" {
+		t.Errorf("stored: %+v", c)
+	}
+	// Maxim's "personal" is his own; he can't reach Antonio's.
+	max.do(t, "GET", "/settings/calendar", nil)
+	max.do(t, "POST", "/settings/calendar/personal", url.Values{"name": {"Mine"}})
+	if c, _ := e.cal.Calendar("antonio", "personal"); c.Name != "Work" {
+		t.Errorf("maxim renamed antonio's calendar: %+v", c)
+	}
+	if code, _, _ := max.do(t, "POST", "/settings/calendar/nope", url.Values{"name": {"x"}}); code != http.StatusNotFound {
+		t.Errorf("unknown calendar: %d", code)
+	}
+}

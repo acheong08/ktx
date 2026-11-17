@@ -182,7 +182,7 @@ Every change, from a calendar app or the UI, is one commit (`Calendar: add "Acme
 - **iPhone:** Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add CalDAV Account; server `brain.internal.melzi.dev`.
 - **Thunderbird:** New Calendar → On the Network; location `https://brain.internal.melzi.dev/dav/`.
 
-The first sign-in creates a `personal` calendar. Clients can create more (MKCALENDAR or extended MKCOL), or use **Settings → Calendar**.
+The first sign-in creates a `personal` calendar. Rename a calendar on **Settings → Calendar** or in your calendar app (name and colour); its id, and so its path, never change. Clients can create more (MKCALENDAR or extended MKCOL), or use **Settings → Calendar**.
 
 **Seeding from an export:** **Settings → Calendar** → Import an .ics file (Google, Apple and Outlook exports, up to 50 MB). Events are upserted by UID; nothing is deleted, so importing again is safe. The page reports what was added, updated, unchanged and skipped (tasks, events without a UID), and lists the last 7 and next 14 days with the transcripts linked to each event.
 

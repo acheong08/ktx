@@ -160,6 +160,35 @@ func CreateCalendar(root string, c Calendar) ([]string, error) {
 	return []string{rel}, writeFile(root, rel, append(b, '\n'))
 }
 
+// colorRe accepts #rrggbb and #rrggbbaa, as Apple Calendar writes them.
+var colorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$`)
+
+// UpdateCalendar rewrites an existing calendar's metadata (name, colour,
+// description); its id and path stay. It returns the paths to commit, none
+// if nothing changed.
+func UpdateCalendar(root string, c Calendar) ([]string, error) {
+	old, err := GetCalendar(root, c.Owner, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	c.Name = strings.TrimSpace(c.Name)
+	if c.Name == "" {
+		c.Name = c.ID
+	}
+	if c.Color != "" && !colorRe.MatchString(c.Color) {
+		return nil, fmt.Errorf("%w: colours are #rrggbb", ErrInvalid)
+	}
+	if len(c.Name) > 200 || len(c.Description) > 2000 {
+		return nil, fmt.Errorf("%w: name or description too long", ErrInvalid)
+	}
+	if old.Name == c.Name && old.Color == c.Color && old.Description == c.Description {
+		return nil, nil
+	}
+	b, _ := json.MarshalIndent(c, "", "  ")
+	rel := path.Join(c.Dir(), metaFile)
+	return []string{rel}, writeFile(root, rel, append(b, '\n'))
+}
+
 // ListObjects reads every event file of a calendar, by name.
 func ListObjects(root string, c Calendar) ([]Object, error) {
 	dir := filepath.Join(root, filepath.FromSlash(c.Dir()))

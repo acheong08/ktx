@@ -295,3 +295,50 @@ func TestCTag(t *testing.T) {
 		t.Errorf("find calendars: %v %v", cals, err)
 	}
 }
+
+func TestPropPatch(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	send := func(user, tok, path, body string) (int, string) {
+		req, _ := http.NewRequest("PROPPATCH", e.ts.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		req.SetBasicAuth(user, tok)
+		resp, err := e.ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	// As Apple Calendar sends it: name, colour and its own order property.
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<A:propertyupdate xmlns:A="DAV:"><A:set><A:prop><A:displayname>Melzi work</A:displayname>
+<B:calendar-color xmlns:B="http://apple.com/ns/ical/">#FF2968FF</B:calendar-color>
+<B:calendar-order xmlns:B="http://apple.com/ns/ical/">3</B:calendar-order></A:prop></A:set></A:propertyupdate>`
+	code, out := send("antonio", e.antonioTok, "/dav/antonio/calendars/work/", body)
+	if code != http.StatusMultiStatus || !strings.Contains(out, "HTTP/1.1 200 OK") || !strings.Contains(out, `<displayname xmlns="DAV:"/>`) {
+		t.Fatalf("proppatch: %d %s", code, out)
+	}
+	c, _ := e.svc.Calendar("antonio", "work")
+	if c.Name != "Melzi work" || c.Color != "#FF2968FF" {
+		t.Errorf("stored: %+v", c)
+	}
+	msg, _ := exec.Command("git", "--git-dir", e.remote, "log", "-1", "--format=%s", "main").Output()
+	if got := strings.TrimSpace(string(msg)); got != `Calendar: rename antonio/work to "Melzi work"` {
+		t.Errorf("commit %q", got)
+	}
+	// Same path; the new name is what clients see.
+	cals, err := e.client(t, "antonio", e.antonioTok).FindCalendars(ctx, "/dav/antonio/calendars/")
+	if err != nil || cals[0].Path != "/dav/antonio/calendars/work/" || cals[0].Name != "Melzi work" || cals[0].Color != "#FF2968FF" {
+		t.Errorf("after rename: %+v %v", cals, err)
+	}
+	// Someone else's calendar, a bad colour.
+	if code, _ := send("maxim", e.maxTok, "/dav/maxim/calendars/antonio~work/", body); code != http.StatusForbidden {
+		t.Errorf("rename of shared calendar: %d", code)
+	}
+	bad := strings.Replace(body, "#FF2968FF", "red", 1)
+	if _, out := send("antonio", e.antonioTok, "/dav/antonio/calendars/work/", bad); !strings.Contains(out, "409") {
+		t.Errorf("bad colour: %s", out)
+	}
+}

@@ -108,6 +108,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "PROPFIND":
 		s.propfind(w, r.WithContext(ctx))
 		return
+	case "PROPPATCH":
+		s.proppatch(w, r.WithContext(ctx))
+		return
 	}
 	s.h.ServeHTTP(w, r.WithContext(ctx))
 }

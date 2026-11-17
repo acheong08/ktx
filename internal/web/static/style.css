@@ -134,6 +134,8 @@ textarea.mono, #participants { font-family: ui-monospace, Menlo, monospace; font
 .retype { justify-content: space-between; }
 
 .settings-tabs { margin-bottom: 1.25rem; }
+form.rename { display: flex; gap: .4rem; }
+form.rename input { width: 12rem; min-width: 0; flex: 1; }
 .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0 2rem; }
 .list code { word-break: break-all; }
 
