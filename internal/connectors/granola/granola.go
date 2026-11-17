@@ -58,7 +58,7 @@ func New() *Connector {
 func (c *Connector) Kind() string  { return "granola" }
 func (c *Connector) Title() string { return "Granola" }
 func (c *Connector) Description() string {
-	return "Meeting notes, summaries and transcripts from Granola, stored in transcripts/meetings/. Needs a Business plan API key."
+	return "Meeting notes, summaries and transcripts from Granola, stored in transcripts/meetings/ by default. Needs a Business plan API key."
 }
 func (c *Connector) Interval() time.Duration { return 10 * time.Minute }
 
@@ -66,13 +66,27 @@ func (c *Connector) Fields() []connectors.Field {
 	return []connectors.Field{
 		{Name: "api_key", Label: "API key", Secret: true, Required: true, Placeholder: "grn_…",
 			Help: "In the Granola desktop app: Settings → Connectors → API keys → Create new key, with the Personal notes scope."},
+		{Name: "type", Label: "Type for new notes", Placeholder: DefaultType,
+			Help: "The transcripts/<type>/ folder new notes go to, e.g. customer_discovery. Notes already stored stay where they are. Optional; default meetings."},
 		{Name: "timezone", Label: "Time zone", Placeholder: "America/Los_Angeles",
 			Help: "Granola reports times in UTC; this sets the meeting's local time zone. Optional."},
 	}
 }
 
+// newType is the type new notes are filed under.
+func newType(cfg connectors.Config) (string, error) {
+	t := cfg.Settings["type"]
+	if t == "" {
+		return DefaultType, nil
+	}
+	return transcript.NormalizeType(t)
+}
+
 // Check makes one small request and reports the owner of the newest note.
 func (c *Connector) Check(ctx context.Context, cfg connectors.Config) (string, error) {
+	if _, err := newType(cfg); err != nil {
+		return "", err
+	}
 	if tz := cfg.Settings["timezone"]; tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {
 			return "", fmt.Errorf("time zone %q is not an IANA name like America/Los_Angeles", tz)
@@ -98,6 +112,10 @@ func (c *Connector) Sync(ctx context.Context, cfg connectors.Config, cursor stri
 			return cursor, err
 		}
 		loc = l
+	}
+	typ, err := newType(cfg)
+	if err != nil {
+		return cursor, err
 	}
 
 	q := url.Values{"page_size": {"30"}}
@@ -136,8 +154,8 @@ func (c *Connector) Sync(ctx context.Context, cfg connectors.Config, cursor stri
 		if err != nil {
 			return cursor, fmt.Errorf("note %s: %w", id, err)
 		}
-		// New notes go to transcripts/meetings/; ones sorted by hand stay put.
-		if err := emit(store.Item{Doc: doc, DefaultType: DefaultType}); err != nil {
+		// New notes go to the configured type; ones already stored stay put.
+		if err := emit(store.Item{Doc: doc, DefaultType: typ}); err != nil {
 			return cursor, err
 		}
 	}

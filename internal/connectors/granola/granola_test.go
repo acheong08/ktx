@@ -177,3 +177,20 @@ func TestSync(t *testing.T) {
 		t.Errorf("second run: %d items", len(again))
 	}
 }
+
+func TestConfiguredType(t *testing.T) {
+	ts, _ := fakeAPI(t)
+	c := newConn(ts)
+	conf := connectors.Config{Secrets: cfg.Secrets, Settings: map[string]string{"type": "Customer_Discovery"}}
+	var items []store.Item
+	if _, err := c.Sync(context.Background(), conf, "", func(it store.Item) error { items = append(items, it); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 || items[0].DefaultType != "customer_discovery" {
+		t.Fatalf("items: %+v", items)
+	}
+	bad := connectors.Config{Secrets: cfg.Secrets, Settings: map[string]string{"type": "../x"}}
+	if _, err := c.Check(context.Background(), bad); err == nil {
+		t.Error("bad type accepted")
+	}
+}

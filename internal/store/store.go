@@ -129,6 +129,7 @@ type PutResult struct {
 	Path         string
 	PreviousPath string // set when an update moved the file
 	Git          gitrepo.Result
+	Err          error // per-item failure in SetTypes (ErrNotFound)
 }
 
 // Results reported by Put and SetType.
@@ -339,59 +340,126 @@ func (s *Store) SetType(ctx context.Context, id, typ, user string) (PutResult, e
 	}
 	var out PutResult
 	res, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
-		existing, err := findByID(root, id)
-		if err != nil {
-			return gitrepo.Change{}, err
+		var m moved
+		var err error
+		out, m, err = setTypeIn(root, id, typ)
+		if err != nil || out.Result == ResultUnchanged {
+			return gitrepo.Change{Paths: m.paths}, err
 		}
-		if existing == "" {
-			return gitrepo.Change{}, ErrNotFound
-		}
-		old, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(existing)))
-		if err != nil {
-			return gitrepo.Change{}, err
-		}
-		doc, _, err := transcript.ParseStored(old)
-		if err != nil {
-			return gitrepo.Change{}, fmt.Errorf("%s: %w", existing, err)
-		}
-
-		if typ != "" {
-			doc.Set("type", typ)
-		} else {
-			doc.Unset("type")
-		}
-		content, err := doc.Render()
-		if err != nil {
-			return gitrepo.Change{}, err
-		}
-		rel := path.Join(folderDir(typ), path.Base(existing))
-		out.Path = rel
-		if rel == existing && bytes.Equal(old, content) {
-			out.Result = ResultUnchanged
-			return gitrepo.Change{}, nil
-		}
-		out.Result = ResultUpdated
-
 		subject := "Move transcript to " + typ
 		if typ == "" {
 			subject = "Mark transcript unsorted"
 		}
-		label := Entry{Meta: doc.Meta, Path: existing}.Label()
-		ch := gitrepo.Change{Paths: []string{rel}, Message: commitMessage(subject, label, doc.Start, id, "Changed-By: "+user)}
-		if err := writeFile(root, rel, content); err != nil {
-			return ch, err
-		}
-		if rel != existing {
-			ch.Paths = append(ch.Paths, existing)
-			out.PreviousPath = existing
-			if err := os.Remove(filepath.Join(root, filepath.FromSlash(existing))); err != nil {
-				return ch, err
-			}
-		}
-		return ch, nil
+		return gitrepo.Change{Paths: m.paths, Message: commitMessage(subject, m.label, m.start, id, "Changed-By: "+user)}, nil
 	})
 	out.Git = res
 	return out, err
+}
+
+// SetTypes moves several transcripts to the folder for typ in one commit.
+// Ids that don't exist are reported as ErrNotFound in their result's Err;
+// the others still move. Nothing is committed if none changed.
+func (s *Store) SetTypes(ctx context.Context, ids []string, typ, user string) ([]PutResult, gitrepo.Result, error) {
+	typ, err := transcript.NormalizeType(typ)
+	if err != nil {
+		return nil, gitrepo.Result{}, err
+	}
+	out := make([]PutResult, len(ids))
+	res, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
+		var ch gitrepo.Change
+		var lines []string
+		moved := 0
+		for i, id := range ids {
+			r, m, err := setTypeIn(root, id, typ)
+			ch.Paths = append(ch.Paths, m.paths...)
+			if errors.Is(err, ErrNotFound) {
+				out[i] = PutResult{Result: ResultSkipped, Err: err}
+				continue
+			}
+			if err != nil {
+				return ch, err
+			}
+			out[i] = r
+			if r.Result == ResultUpdated {
+				moved++
+				lines = append(lines, "- "+m.label+" ("+id+")")
+			}
+		}
+		if moved == 0 {
+			return gitrepo.Change{}, nil
+		}
+		dest := typ
+		if dest == "" {
+			dest = transcript.Unsorted
+		}
+		noun := "transcripts"
+		if moved == 1 {
+			noun = "transcript"
+		}
+		ch.Message = fmt.Sprintf("Move %d %s to %s\n\n%s\n\nChanged-By: %s", moved, noun, dest, strings.Join(lines, "\n"), user)
+		return ch, nil
+	})
+	for i := range out {
+		out[i].Git = res
+	}
+	return out, res, err
+}
+
+// moved describes one move, for the commit.
+type moved struct {
+	paths []string
+	label string
+	start time.Time
+}
+
+// setTypeIn moves one transcript within the working copy (under the lock).
+func setTypeIn(root, id, typ string) (PutResult, moved, error) {
+	var out PutResult
+	var m moved
+	existing, err := findByID(root, id)
+	if err != nil {
+		return out, m, err
+	}
+	if existing == "" {
+		return out, m, ErrNotFound
+	}
+	old, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(existing)))
+	if err != nil {
+		return out, m, err
+	}
+	doc, _, err := transcript.ParseStored(old)
+	if err != nil {
+		return out, m, fmt.Errorf("%s: %w", existing, err)
+	}
+	if typ != "" {
+		doc.Set("type", typ)
+	} else {
+		doc.Unset("type")
+	}
+	content, err := doc.Render()
+	if err != nil {
+		return out, m, err
+	}
+	rel := path.Join(folderDir(typ), path.Base(existing))
+	out.Path = rel
+	if rel == existing && bytes.Equal(old, content) {
+		out.Result = ResultUnchanged
+		return out, m, nil
+	}
+	out.Result = ResultUpdated
+	m.label, m.start = Entry{Meta: doc.Meta, Path: existing}.Label(), doc.Start
+	m.paths = []string{rel}
+	if err := writeFile(root, rel, content); err != nil {
+		return out, m, err
+	}
+	if rel != existing {
+		m.paths = append(m.paths, existing)
+		out.PreviousPath = existing
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(existing))); err != nil {
+			return out, m, err
+		}
+	}
+	return out, m, nil
 }
 
 // Edit changes a stored transcript with apply and writes it back in one

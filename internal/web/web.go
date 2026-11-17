@@ -16,6 +16,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -120,6 +121,7 @@ func (u *UI) Handler() http.Handler {
 	mux.HandleFunc("POST /transcripts/{id}", u.page(u.saveTranscript))
 	mux.HandleFunc("POST /transcripts/{id}/delete", u.page(u.deleteTranscript))
 	mux.HandleFunc("POST /transcripts/{id}/type", u.page(u.setType))
+	mux.HandleFunc("POST /transcripts/type", u.page(u.setTypes))
 	if u.cal != nil {
 		mux.HandleFunc("POST /transcripts/{id}/event", u.page(u.setEvent))
 	}
@@ -482,6 +484,78 @@ func (u *UI) setType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/transcripts/"+id+"?saved=1", http.StatusSeeOther)
+}
+
+// setTypes moves the selected transcripts to one type, in one commit, then
+// shows the list again with the same filters.
+func (u *UI) setTypes(w http.ResponseWriter, r *http.Request) {
+	user := actor(r)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	ids, typ := r.PostForm["ids"], r.PostFormValue("type")
+	var fl flash
+	if len(ids) == 0 {
+		fl = flash{"error", "Tick the transcripts to change first."}
+	} else if strings.TrimSpace(typ) == "" {
+		fl = flash{"error", "Enter a type (or \"unsorted\")."}
+	} else {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+		defer cancel()
+		res, git, err := u.store.SetTypes(ctx, ids, typ, user)
+		moved, same, missing := 0, 0, 0
+		for _, x := range res {
+			switch {
+			case x.Err != nil:
+				missing++
+			case x.Result == store.ResultUpdated:
+				moved++
+			default:
+				same++
+			}
+		}
+		dest, _ := transcript.NormalizeType(typ)
+		if dest == "" {
+			dest = transcript.Unsorted
+		}
+		switch {
+		case err != nil:
+			u.log.Warn("bulk set type failed", "type", typ, "count", len(ids), "user", user, "err", err)
+			fl = flash{"error", "Not saved: " + err.Error()}
+		case moved == 0:
+			fl = flash{"ok", "All already in " + dest + "; nothing changed."}
+		default:
+			msg := fmt.Sprintf("Moved %d to %s", moved, dest)
+			if same > 0 {
+				msg += fmt.Sprintf(" (%d already there)", same)
+			}
+			if missing > 0 {
+				msg += fmt.Sprintf("; %d no longer exist", missing)
+			}
+			fl = flash{"ok", msg + "."}
+			if git.PushErr != nil {
+				fl = flash{"warn", msg + ", committed but not pushed to GitHub yet; it will be pushed on the next sync."}
+			}
+			u.log.Info("transcripts moved", "count", moved, "type", dest, "user", user, "commit", git.Commit)
+		}
+	}
+	v, err := u.listView(r, r.PostFormValue("q"), r.PostFormValue("folder"), r.PostFormValue("sort"))
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	v.Flash = fl
+	status := http.StatusOK
+	if fl.Kind == "error" && !isPartial(r) {
+		status = http.StatusUnprocessableEntity
+	}
+	if isPartial(r) {
+		u.render(w, r, status, results(v))
+		return
+	}
+	u.render(w, r, status, listPage(v))
 }
 
 // --- helpers ---------------------------------------------------------------

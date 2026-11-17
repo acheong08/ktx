@@ -110,13 +110,30 @@ templ results(v listView) {
 			}
 		</p>
 	} else {
+		<form id="bulk" class="bulk" method="post" action="/transcripts/type" hx-post="/transcripts/type" hx-target="#results" hx-sync="this:drop">
+			<input type="hidden" name="q" value={ v.Q }/>
+			<input type="hidden" name="folder" value={ v.Folder }/>
+			<input type="hidden" name="sort" value={ v.Sort }/>
+			<label for="bulk-type">Set type of selected</label>
+			<input id="bulk-type" type="text" name="type" list="type-options" placeholder="e.g. customer_discovery" autocomplete="off" required/>
+			<button type="submit">Apply</button>
+			<span class="muted" data-selected-count></span>
+		</form>
 		<table class="transcripts">
 			<thead>
-				<tr><th>Date</th><th>Conversation</th><th>Participants</th><th>Type</th></tr>
+				<tr>
+					<th class="pick"><input type="checkbox" data-select-all="bulk-ids" aria-label="Select all shown"/></th>
+					<th>Date</th><th>Conversation</th><th>Participants</th><th>Type</th>
+				</tr>
 			</thead>
 			<tbody>
 				for _, e := range v.Entries {
 					<tr>
+						<td class="pick">
+							if e.ID != "" {
+								<input type="checkbox" name="ids" value={ e.ID } form="bulk" data-group="bulk-ids" aria-label={ "Select " + e.Label() }/>
+							}
+						</td>
 						<td class="date">{ fmtDate(e) }</td>
 						<td>
 							if e.ID != "" {

@@ -112,6 +112,8 @@ No auth. Returns `{"ok":true}`.
 - **Type suggestions:** `BRAIN_TRANSCRIPT_TYPES` plus every folder that already exists. Any new name matching `[a-z0-9_-]` creates a folder.
 - **Built with** [templ](https://templ.guide) components and [htmx 4](https://four.htmx.org). htmx is vendored in `internal/web/static`, so the page loads nothing from a CDN.
 
+**Bulk sorting:** on the list, filter (e.g. search a participant's name or email), tick the rows (the header box ticks all shown), enter a type and Apply. All the moves are one commit.
+
 ### Sign-in
 
 With `BRAIN_OIDC_ISSUER` set, every page needs sign-in through the identity provider. On the server that's [Pocket ID](https://pocket-id.org) at `id.internal.melzi.dev` (passkeys, OIDC).
@@ -130,7 +132,7 @@ The **API tokens** page lets each person create tokens for scripts (`POST /v1/tr
 
 A connection is a service ktx pulls from, with one person's credential. You add them on the **Connections** page; the owner or an admin can change or delete them.
 
-- **Granola** (Business plan API key) → `transcripts/meetings/<date>-<time>-<title>-<id>.md`, i.e. transcripts of type `meetings`. That type is only a default for new notes: re-sort one in the UI and later syncs of it stay where you put it.
+- **Granola** (Business plan API key) → `transcripts/<type>/<date>-<time>-<title>-<id>.md`. The type is the connection's "Type for new notes" setting (default `meetings`). It only applies to new notes: re-sort one in the UI and later syncs of it stay where you put it.
   - **Front matter:** title, date (calendar time, in the connection's time zone), participants, `source: granola`, `source_id` (the note ID), `granola_url`, `calendar_event_id`, folders.
   - **Body:** summary, the owner's own notes, transcript.
   - **What gets fetched:** only notes Granola has finished (with a summary).

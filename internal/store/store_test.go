@@ -336,3 +336,50 @@ func TestEditedTranscriptSurvivesSync(t *testing.T) {
 		t.Errorf("manual upload: %+v %v", r, err)
 	}
 }
+
+func TestSetTypes(t *testing.T) {
+	s, remote := newStore(t)
+	ctx := context.Background()
+	items := []Item{
+		{Doc: meeting(t, "a", "Acme intro", "x"), DefaultType: "meetings"},
+		{Doc: meeting(t, "b", "Beta intro", "y"), DefaultType: "meetings"},
+		{Doc: meeting(t, "c", "Gamma intro", "z")},
+	}
+	res, _, err := s.PutBatch(ctx, items, "antonio", "Sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{items[0].Doc.ID, items[1].Doc.ID, items[2].Doc.ID, "000000000000"}
+	out, git, err := s.SetTypes(ctx, ids, "customer_discovery", "maxim")
+	if err != nil || !git.Pushed {
+		t.Fatalf("%v %+v", err, git)
+	}
+	for i := 0; i < 3; i++ {
+		if out[i].Result != ResultUpdated || !strings.HasPrefix(out[i].Path, "transcripts/customer_discovery/") || out[i].PreviousPath != res[i].Path {
+			t.Errorf("%d: %+v", i, out[i])
+		}
+	}
+	if out[3].Err != ErrNotFound {
+		t.Errorf("missing id: %+v", out[3])
+	}
+	msg := gitOut(t, "--git-dir", remote, "log", "-1", "--format=%B", "main")
+	for _, want := range []string{"Move 3 transcripts to customer_discovery", "- Acme intro (" + ids[0] + ")", "Changed-By: maxim"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("commit lacks %q:\n%s", want, msg)
+		}
+	}
+	if n := gitOut(t, "--git-dir", remote, "rev-list", "--count", "main"); n != "2" {
+		t.Errorf("want one commit for the batch move, have %s commits", n)
+	}
+	// Again: nothing to do, nothing committed.
+	out, _, err = s.SetTypes(ctx, ids[:3], "customer_discovery", "maxim")
+	if err != nil || out[0].Result != ResultUnchanged || gitOut(t, "--git-dir", remote, "rev-list", "--count", "main") != "2" {
+		t.Errorf("repeat: %+v %v", out, err)
+	}
+	// A connector re-sync keeps the new folder.
+	again := meeting(t, "a", "Acme intro", "x")
+	r, _, err := s.PutBatch(ctx, []Item{{Doc: again, DefaultType: "meetings"}}, "antonio", "Sync")
+	if err != nil || !strings.HasPrefix(r[0].Path, "transcripts/customer_discovery/") {
+		t.Errorf("re-sync moved it back: %+v %v", r, err)
+	}
+}

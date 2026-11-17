@@ -268,3 +268,37 @@ func TestDeleteTranscript(t *testing.T) {
 		t.Errorf("commit:\n%s", msg)
 	}
 }
+
+func TestBulkSetType(t *testing.T) {
+	e := setup(t)
+	doc := func(title, who, src string) string {
+		return "---\ntitle: " + title + "\ndate: 2026-11-14T10:00:00-08:00\nparticipants:\n  - " + who + "\nsource: granola\nsource_id: " + src + "\n---\nNotes.\n"
+	}
+	a := put(t, e.st, doc("Acme one", "Jane Doe <jane@acme.com>", "s1"))
+	b := put(t, e.st, doc("Acme two", "Jane Doe <jane@acme.com>", "s2"))
+	c := put(t, e.st, doc("Other", "Bob <bob@other.com>", "s3"))
+
+	// Search for the participant: only her calls show.
+	_, body, _ := e.do(t, "GET", "/?q=jane", nil, "HX-Request", "true")
+	if !strings.Contains(body, `value="`+a+`"`) || !strings.Contains(body, `value="`+b+`"`) || strings.Contains(body, `value="`+c+`"`) {
+		t.Fatalf("filtered list:\n%s", body)
+	}
+	code, body, _ := e.do(t, "POST", "/transcripts/type", url.Values{"ids": {a, b}, "type": {"customer_discovery"}, "q": {"jane"}}, "HX-Request", "true")
+	if code != 200 || !strings.Contains(body, "Moved 2 to customer_discovery.") {
+		t.Fatalf("bulk: %d\n%s", code, body)
+	}
+	for _, id := range []string{a, b} {
+		if en, _ := e.st.Get(id); en.Folder != "customer_discovery" {
+			t.Errorf("%s in %s", id, en.Folder)
+		}
+	}
+	if en, _ := e.st.Get(c); en.Folder != "unsorted" {
+		t.Errorf("unselected moved to %s", en.Folder)
+	}
+	if _, body, _ = e.do(t, "POST", "/transcripts/type", url.Values{"type": {"advisor"}}, "HX-Request", "true"); !strings.Contains(body, "Tick the transcripts") {
+		t.Error("empty selection")
+	}
+	if _, body, _ = e.do(t, "POST", "/transcripts/type", url.Values{"ids": {a}, "type": {"Bad Type"}}, "HX-Request", "true"); !strings.Contains(body, "Not saved") {
+		t.Error("bad type accepted")
+	}
+}

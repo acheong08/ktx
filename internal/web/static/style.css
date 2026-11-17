@@ -78,6 +78,9 @@ button:disabled, input:disabled { opacity: .6; }
 .sort-next { margin-left: auto; margin-bottom: .3rem; font-size: 14px; }
 
 table.transcripts { width: 100%; border-collapse: collapse; }
+.transcripts .pick { width: 1.5rem; }
+.bulk { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .75rem; }
+.bulk input[type=text] { width: 14rem; }
 .transcripts th { text-align: left; font-weight: 600; color: var(--muted); font-size: 13px; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
 .transcripts td { padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 .transcripts td.date { white-space: nowrap; color: var(--muted); font-size: 14px; }
