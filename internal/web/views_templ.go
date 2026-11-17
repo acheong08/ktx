@@ -767,7 +767,7 @@ func results(v listView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<form id=\"bulk\" class=\"bulk\" method=\"post\" action=\"/transcripts/type\" hx-post=\"/transcripts/type\" hx-target=\"#results\" hx-include=\".filter-field\" hx-sync=\"this:drop\"><input type=\"hidden\" name=\"q\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<form id=\"bulk\" class=\"bulk\" method=\"post\" action=\"/transcripts/type\" hx-post=\"/transcripts/type\" hx-target=\"#results\" hx-sync=\"this:drop\"><input type=\"hidden\" name=\"q\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
