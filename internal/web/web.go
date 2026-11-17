@@ -36,6 +36,7 @@ import (
 
 	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
+	"github.com/acheong08/ktx/internal/oauth"
 	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
 	"github.com/acheong08/ktx/internal/transcript"
@@ -51,6 +52,7 @@ type UI struct {
 	auth   *Auth               // nil: no sign-in
 	conns  *connectors.Manager // nil: no connections page
 	cal    *calendar.Service   // nil: no calendar
+	oauth  *oauth.Provider     // nil: no MCP apps
 	types  []string            // suggested types, merged with the folders that exist
 	log    *slog.Logger
 	assets assets
@@ -68,12 +70,13 @@ type Options struct {
 	Auth       *Auth
 	Connectors *connectors.Manager
 	Calendar   *calendar.Service
+	OAuth      *oauth.Provider // apps (MCP clients) people can allow; needs Auth
 }
 
 // New builds the UI.
 func New(o Options) *UI {
 	return &UI{
-		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, cal: o.Calendar, types: o.Types, log: o.Log,
+		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, cal: o.Calendar, oauth: o.OAuth, types: o.Types, log: o.Log,
 		assets: assets{
 			CSS:  assetURL("style.css"),
 			JS:   assetURL("app.js"),
@@ -136,6 +139,11 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("GET /settings/tokens", u.page(u.tokens))
 		mux.HandleFunc("POST /settings/tokens", u.page(u.createToken))
 		mux.HandleFunc("POST /settings/tokens/{id}/delete", u.page(u.deleteToken))
+	}
+	if u.auth != nil && u.db != nil && u.oauth != nil {
+		mux.HandleFunc("GET /oauth/authorize", u.page(u.authorize))
+		mux.HandleFunc("POST /oauth/authorize", u.page(u.authorizeDecision))
+		mux.HandleFunc("POST /settings/apps/{id}/delete", u.page(u.revokeApp))
 	}
 	if u.auth != nil && u.conns != nil {
 		mux.HandleFunc("GET /settings/connections", u.page(u.connections))

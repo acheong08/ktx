@@ -125,6 +125,7 @@ form.danger { display: flex; gap: 1rem; align-items: center; margin-top: 2rem; p
 .command { display: flex; gap: .5rem; align-items: flex-start; }
 .command pre { flex: 1; margin: 0; padding: .6rem .8rem; background: var(--soft); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--fg); }
 .narrow { max-width: 40rem; margin: 2rem auto; }
+form.buttons { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.5rem; }
 form.settings.wide { max-width: none; }
 form.settings .row { display: flex; flex-wrap: wrap; gap: 1rem; }
 form.settings .row > div { display: grid; gap: .35rem; }

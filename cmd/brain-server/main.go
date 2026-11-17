@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	"github.com/acheong08/ktx/internal/connectors/pocket"
 	"github.com/acheong08/ktx/internal/dav"
 	"github.com/acheong08/ktx/internal/gitrepo"
+	"github.com/acheong08/ktx/internal/mcpserver"
+	"github.com/acheong08/ktx/internal/oauth"
 	"github.com/acheong08/ktx/internal/secrets"
 	"github.com/acheong08/ktx/internal/server"
 	"github.com/acheong08/ktx/internal/state"
@@ -138,6 +141,11 @@ func run(log *slog.Logger) error {
 	ui := web.Options{Store: st, Types: types, Log: log, DB: db, Auth: auth, Calendar: cal}
 	if auth != nil {
 		ui.Connectors = conns // connections belong to people, so they need sign-in
+		// MCP for agents: apps get tokens over OAuth, approved by a signed-in person.
+		ui.OAuth = oauth.New(db, cfg.PublicURL, log)
+		ui.OAuth.Register(mux)
+		mcpserver.New(st, cal, ui.OAuth, version(), log).Register(mux)
+		log.Info("MCP server enabled", "url", ui.OAuth.ResourceURL())
 	}
 	mux.Handle("/", web.New(ui).Handler())
 
@@ -166,4 +174,12 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// version is the module version the binary was built from, if known.
+func version() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
 }

@@ -8,6 +8,7 @@ A small Go server that owns a clone of the brain git repository.
 - **Upload:** you send a transcript over HTTP. The server checks its metadata, writes it to `transcripts/<type>/` (or `transcripts/unsorted/`), commits, and pushes to GitHub.
 - **Web UI:** you can read, search and sort transcripts in a browser. People sign in through Pocket ID (passkeys).
 - **Connectors:** ktx pulls meeting notes from Granola on a schedule into `transcripts/meetings/`. Each person adds their own credential in the UI; it's stored encrypted.
+- **MCP:** AI agents read transcripts and calendars through an MCP server at `/mcp`, after a person allows them over OAuth.
 - **Calendar:** ktx is a CalDAV server (Apple Calendar, Thunderbird). Calendars live in the repo as `.ics` files, and every transcript is linked to the event it was recorded in, which gives it the guests' email addresses.
 
 ```
@@ -128,6 +129,30 @@ With `BRAIN_OIDC_ISSUER` set, every page needs sign-in through the identity prov
 
 The **API tokens** page lets each person create tokens for scripts (`POST /v1/transcripts`). A token is shown once, stored only as a hash, and uploads made with it are attributed to its owner. `BRAIN_API_TOKENS` still works for fixed tokens.
 
+**Connected apps** (same page) lists the MCP clients you allowed, when they were last used, and a Revoke button.
+
+## MCP
+
+`https://brain.internal.melzi.dev/mcp` is an MCP server (streamable HTTP, stateless) for AI agents. It needs sign-in to be configured (`BRAIN_OIDC_ISSUER`); without it there's no `/mcp`.
+
+**What an agent can do:** read, as the person who allowed it, everything that person sees in the web UI: every transcript and every calendar. Nothing can be changed. Tools:
+
+| Tool | |
+|---|---|
+| `search_transcripts` | Newest first; filters: words (as in the UI search), type, participant (name, email or company), from/to dates. Returns metadata, the linked event, and a snippet around the match. |
+| `get_transcript` | Metadata and text by id; long texts in pages (`offset`, `max_bytes`, `next_offset`). |
+| `list_transcript_types` | Types with counts. |
+| `list_calendars` | Every calendar, with owner; `yours` marks the caller's. |
+| `list_events` | Occurrences in a range (default: today + 7 days, at most a year), optionally by calendar or words; organizer, guests, location, description (cut at 2000 bytes), and the transcripts recorded in each. |
+
+Every tool requires an `intent`: one sentence on why the call is made. It is written to the log (`journalctl -u brain-server | grep 'mcp call'`) with the user, app and tool, and not stored anywhere else. Dates without an offset are in America/Los_Angeles.
+
+**Connecting an app:** add the URL as a remote MCP server. The app discovers the rest and opens a browser:
+1. `/mcp` answers 401 with `WWW-Authenticate: Bearer resource_metadata=…/.well-known/oauth-protected-resource/mcp` (RFC 9728), naming ktx as the authorization server (`/.well-known/oauth-authorization-server`, RFC 8414).
+2. The app registers itself at `/oauth/register` (dynamic client registration; always a public client). Redirect URIs may be `https`, `http` (ktx is tailnet-only) or an app scheme; `javascript:`, `data:` and the like are refused. Apps that never get allowed are removed after a day.
+3. `/oauth/authorize` signs you in through Pocket ID as usual and shows a consent page naming the app and where you'll be sent back to. PKCE (S256) is required.
+4. `/oauth/token` swaps the code (once, within 5 minutes) for an access token (1 hour) and a refresh token (60 days, rotated on every use). Tokens are stored as hashes in `state.db` (`oauth_grants`); revoking the app deletes them.
+
 ## Connectors
 
 A connection is a service ktx pulls from, with one person's credential. You add them on the **Connections** page; the owner or an admin can change or delete them.
@@ -219,11 +244,11 @@ Those emails are the link to Folk (people are matched by email); no Folk ids are
 |---|---|---|
 | `BRAIN_REPO_URL` | required | e.g. `git@github.com:org/brain.git` |
 | `BRAIN_API_TOKENS` | | Optional fixed tokens, `antonio:<token>,maxim:<token>`; at least 24 chars (`openssl rand -hex 32`). The name goes into `uploaded_by` and the commit's `Uploaded-By:` trailer. People can also create their own tokens in the UI. |
-| `BRAIN_STATE_DB` | `./data/state.db` | SQLite: users, sessions, API tokens, connections, run history |
+| `BRAIN_STATE_DB` | `./data/state.db` | SQLite: users, sessions, API tokens, OAuth apps and grants, connections, run history |
 | `BRAIN_MASTER_KEY_FILE` | | 32-byte key (raw or base64) that seals connector credentials. Without it, the systemd credential `ktx-master-key` is used; without either, connectors are off. |
 | `BRAIN_OIDC_ISSUER` | | Identity provider URL, e.g. `https://id.internal.melzi.dev`. Turns on sign-in. |
 | `BRAIN_OIDC_CLIENT_ID`, `BRAIN_OIDC_CLIENT_SECRET` (or `_FILE`) | | ktx's client at the identity provider |
-| `BRAIN_PUBLIC_URL` | | ktx's own URL; the callback is `<url>/auth/callback` |
+| `BRAIN_PUBLIC_URL` | | ktx's own URL; the callback is `<url>/auth/callback`. Also the OAuth issuer, and the MCP resource is `<url>/mcp`. |
 | `BRAIN_OIDC_ADMIN_GROUP` | `ktx-admins` | Members are ktx admins |
 | `BRAIN_SESSION_TTL` | `24h` | How long a sign-in lasts |
 | `BRAIN_SSH_KEY_PATH` | | Deploy key (private key file) |

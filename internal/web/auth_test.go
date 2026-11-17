@@ -28,6 +28,8 @@ import (
 	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
 	"github.com/acheong08/ktx/internal/gitrepo"
+	"github.com/acheong08/ktx/internal/mcpserver"
+	"github.com/acheong08/ktx/internal/oauth"
 	"github.com/acheong08/ktx/internal/secrets"
 	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
@@ -177,7 +179,12 @@ func setupAuth(t *testing.T) *authEnv {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	t.Cleanup(ts.Close)
 	auth := NewAuth(OIDCConfig{Issuer: idp.URL, ClientID: "ktx", ClientSecret: "client-secret", PublicURL: ts.URL, AdminGroup: "ktx-admins"}, db, quiet)
-	handler = New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr, Calendar: cal}).Handler()
+	mux := http.NewServeMux()
+	prov := oauth.New(db, ts.URL, quiet)
+	prov.Register(mux)
+	mcpserver.New(st, cal, prov, "test", quiet).Register(mux)
+	mux.Handle("/", New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr, Calendar: cal, OAuth: prov}).Handler())
+	handler = mux
 	return &authEnv{ts: ts, idp: idp, db: db, st: st, cal: cal}
 }
 

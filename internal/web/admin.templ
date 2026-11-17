@@ -208,6 +208,55 @@ templ tokensPage(v tokensView) {
 			</p>
 			@tokenSection(v, "caldav", v.CalTokens, "e.g. iPhone")
 		}
+		if v.MCP {
+			<h2 id="apps">Connected apps</h2>
+			<p class="lead">
+				AI agents and other MCP clients can read every transcript and calendar as you (read-only).
+				Add the MCP server <code>{ v.MCPURL }</code> to the app; it will ask you to allow it here.
+			</p>
+			if len(v.Apps) > 0 {
+				<table class="list">
+					<thead>
+						<tr><th>App</th><th>Allowed</th><th>Last used</th><th></th></tr>
+					</thead>
+					<tbody>
+						for _, a := range v.Apps {
+							<tr>
+								<td data-label="App">{ a.ClientName }</td>
+								<td data-label="Allowed">{ ago(a.CreatedAt) }</td>
+								<td data-label="Last used">{ ago(a.LastUsedAt) }</td>
+								<td class="actions">
+									<form method="post" action={ templ.URL("/settings/apps/" + strconv.FormatInt(a.ID, 10) + "/delete") }>
+										<button type="submit">Revoke</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			} else {
+				<p class="muted">No apps connected.</p>
+			}
+		}
+	}
+}
+
+templ authorizePage(v authorizeView) {
+	@layout("Allow app", v.Chrome) {
+		<section class="narrow">
+			<h1>Allow “{ v.App }”?</h1>
+			<p>
+				It will be able to <strong>read every transcript and calendar in ktx</strong> as { v.Chrome.User }.
+				It can't change anything. Every request it makes says why, and is logged.
+			</p>
+			<p>Afterwards you'll be sent to <code>{ v.Destination }</code>. Only allow it if you just started connecting this app.</p>
+			<p class="muted">You can revoke it any time under Settings → Tokens.</p>
+			<form method="post" action="/oauth/authorize" class="buttons">
+				<input type="hidden" name="request" value={ v.Request }/>
+				<button type="submit" name="decision" value="allow" class="primary">Allow</button>
+				<button type="submit" name="decision" value="deny">Cancel</button>
+			</form>
+		</section>
 	}
 }
 

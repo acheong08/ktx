@@ -29,6 +29,8 @@ type Occurrence struct {
 	Start, End   time.Time
 	AllDay       bool
 	Summary      string
+	Location     string
+	Description  string
 	Organizer    Attendee
 	Attendees    []Attendee
 }
@@ -69,6 +71,8 @@ type event struct {
 	AllDay       bool
 	Cancelled    bool
 	Summary      string
+	Location     string
+	Description  string
 	Organizer    Attendee
 	Attendees    []Attendee
 	rset         *rrule.Set
@@ -131,6 +135,8 @@ func parseEvent(c *ical.Component) (event, error) {
 	var e event
 	e.UID, _ = c.Props.Text(ical.PropUID)
 	e.Summary, _ = c.Props.Text(ical.PropSummary)
+	e.Location, _ = c.Props.Text(ical.PropLocation)
+	e.Description, _ = c.Props.Text(ical.PropDescription)
 	if st := c.Props.Get(ical.PropStatus); st != nil && strings.EqualFold(st.Value, "CANCELLED") {
 		e.Cancelled = true
 	}
@@ -321,7 +327,8 @@ func expand(cal Calendar, events []event, from, to time.Time) []Occurrence {
 		return Occurrence{
 			Calendar: cal.Key(), Owner: cal.Owner, UID: e.UID, RecurrenceID: rid,
 			Start: start, End: start.Add(e.End.Sub(e.Start)), AllDay: e.AllDay,
-			Summary: e.Summary, Organizer: e.Organizer, Attendees: e.Attendees,
+			Summary: e.Summary, Location: e.Location, Description: e.Description,
+			Organizer: e.Organizer, Attendees: e.Attendees,
 		}
 	}
 	overlaps := func(o Occurrence) bool {

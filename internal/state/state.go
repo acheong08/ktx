@@ -1,5 +1,6 @@
 // Package state is ktx's operational database (SQLite): users, sessions,
-// API tokens, connector connections and their run history.
+// API tokens, OAuth apps and grants, connector connections and their run
+// history.
 //
 // Knowledge lives in the git repository; this database holds only what is
 // needed to run the service. Losing it costs re-entering credentials and
@@ -110,6 +111,27 @@ var migrations = []string{
 	CREATE INDEX runs_by_connection ON runs(connection_id, id DESC);`,
 	// Tokens get a scope: "api" (uploads) or "caldav" (calendar clients).
 	`ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'api';`,
+	// OAuth for the MCP server: apps that registered themselves (dynamic
+	// client registration), and what people allowed them (a grant holds the
+	// current access and refresh token).
+	`CREATE TABLE oauth_clients (
+		id            TEXT PRIMARY KEY,
+		name          TEXT NOT NULL,
+		redirect_uris TEXT NOT NULL,             -- JSON array
+		created_at    TEXT NOT NULL
+	);
+	CREATE TABLE oauth_grants (
+		id                 INTEGER PRIMARY KEY,
+		user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		client_id          TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+		access_hash        TEXT NOT NULL UNIQUE,
+		access_expires_at  TEXT NOT NULL,
+		refresh_hash       TEXT NOT NULL UNIQUE,
+		refresh_expires_at TEXT NOT NULL,
+		created_at         TEXT NOT NULL,
+		last_used_at       TEXT
+	);
+	CREATE INDEX oauth_grants_by_user ON oauth_grants(user_id);`,
 }
 
 func (s *DB) migrate() error {

@@ -273,6 +273,9 @@ type tokensView struct {
 	Chrome    chrome
 	Tokens    []state.APIToken
 	CalTokens []state.APIToken // nil when there's no calendar
+	Apps      []state.OAuthGrant
+	MCP       bool   // apps can connect over OAuth
+	MCPURL    string // the MCP endpoint
 	Calendar  bool
 	Username  string
 	DAVURL    string
@@ -291,7 +294,13 @@ func (u *UI) tokensView(r *http.Request) (tokensView, error) {
 		return v, err
 	}
 	if v.Calendar {
-		v.CalTokens, err = u.db.Tokens(user.ID, state.ScopeCalDAV)
+		if v.CalTokens, err = u.db.Tokens(user.ID, state.ScopeCalDAV); err != nil {
+			return v, err
+		}
+	}
+	if u.oauth != nil {
+		v.MCP, v.MCPURL = true, u.oauth.ResourceURL()
+		v.Apps, err = u.db.OAuthGrants(user.ID)
 	}
 	return v, err
 }
