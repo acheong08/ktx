@@ -33,6 +33,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/renderer/html"
 
+	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
 	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
@@ -48,6 +49,7 @@ type UI struct {
 	db     *state.DB           // nil: no sign-in, connections or API tokens
 	auth   *Auth               // nil: no sign-in
 	conns  *connectors.Manager // nil: no connections page
+	cal    *calendar.Service   // nil: no calendar
 	types  []string            // suggested types, merged with the folders that exist
 	log    *slog.Logger
 	assets assets
@@ -64,12 +66,13 @@ type Options struct {
 	DB         *state.DB
 	Auth       *Auth
 	Connectors *connectors.Manager
+	Calendar   *calendar.Service
 }
 
 // New builds the UI.
 func New(o Options) *UI {
 	return &UI{
-		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, types: o.Types, log: o.Log,
+		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, cal: o.Calendar, types: o.Types, log: o.Log,
 		assets: assets{
 			CSS:  assetURL("style.css"),
 			JS:   assetURL("app.js"),
@@ -117,6 +120,14 @@ func (u *UI) Handler() http.Handler {
 	mux.HandleFunc("POST /transcripts/{id}", u.page(u.saveTranscript))
 	mux.HandleFunc("POST /transcripts/{id}/delete", u.page(u.deleteTranscript))
 	mux.HandleFunc("POST /transcripts/{id}/type", u.page(u.setType))
+	if u.cal != nil {
+		mux.HandleFunc("POST /transcripts/{id}/event", u.page(u.setEvent))
+	}
+	if u.auth != nil && u.cal != nil {
+		mux.HandleFunc("GET /calendar", u.page(u.calendarPage))
+		mux.HandleFunc("POST /calendar", u.page(u.createCalendar))
+		mux.HandleFunc("POST /calendar/import", u.page(u.importCalendar))
+	}
 
 	if u.auth != nil && u.db != nil {
 		mux.HandleFunc("GET /tokens", u.page(u.tokens))
@@ -188,6 +199,7 @@ type chrome struct {
 	SignIn      bool
 	Connections bool
 	Tokens      bool
+	Calendar    bool
 	Nav         string // active section
 }
 
@@ -197,6 +209,7 @@ func (u *UI) chrome(r *http.Request, nav string) chrome {
 		c.User, c.IsAdmin = user.Display(), user.IsAdmin
 		c.Connections = u.conns != nil
 		c.Tokens = u.db != nil
+		c.Calendar = u.cal != nil
 	}
 	return c
 }
@@ -379,6 +392,7 @@ type detailView struct {
 	BackURL   string
 	BackLabel string
 	Flash     flash
+	Events    []eventChoice // nil: no calendar
 }
 
 func (u *UI) detail(w http.ResponseWriter, r *http.Request) {
@@ -389,6 +403,8 @@ func (u *UI) detail(w http.ResponseWriter, r *http.Request) {
 		fl = flash{"ok", "Added, committed and pushed."}
 	case "unchanged":
 		fl = flash{"ok", "Nothing had changed."}
+	case "event":
+		fl = flash{"ok", "Calendar event saved, committed and pushed."}
 	default:
 		fl = flash{"ok", "Saved, committed and pushed."}
 	}
@@ -411,10 +427,14 @@ func (u *UI) renderDetail(w http.ResponseWriter, r *http.Request, status int, id
 		u.fail(w, r, err)
 		return
 	}
-	u.render(w, r, status, detailPage(detailView{
+	v := detailView{
 		Chrome: u.chrome(r, "transcripts"), Entry: e, BodyHTML: body.String(), Types: u.typeOptions(entries),
 		BackURL: listURL("", e.Folder, ""), BackLabel: e.Folder, Flash: fl,
-	}))
+	}
+	if u.cal != nil && e.ID != "" {
+		v.Events = u.eventChoices(e)
+	}
+	u.render(w, r, status, detailPage(v))
 }
 
 // --- sorting ---------------------------------------------------------------
@@ -544,4 +564,23 @@ func participantLine(p transcript.Participant) string {
 		s += " (" + strings.Join(extra, ", ") + ")"
 	}
 	return s
+}
+
+func davPath(viewer, owner, id string) string {
+	if viewer == owner {
+		return "/dav/" + viewer + "/calendars/" + id + "/"
+	}
+	return "/dav/" + viewer + "/calendars/" + owner + "~" + id + "/"
+}
+
+func guestList(gs []calendar.Attendee) string {
+	var out []string
+	for _, g := range gs {
+		if g.Name != "" {
+			out = append(out, g.Name)
+		} else {
+			out = append(out, g.Email)
+		}
+	}
+	return strings.Join(out, ", ")
 }

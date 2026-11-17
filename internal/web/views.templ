@@ -24,8 +24,11 @@ templ layout(title string, c chrome) {
 					if c.Connections {
 						<a href="/connections" class={ templ.KV("active", c.Nav == "connections") }>Connections</a>
 					}
+					if c.Calendar {
+						<a href="/calendar" class={ templ.KV("active", c.Nav == "calendar") }>Calendar</a>
+					}
 					if c.Tokens {
-						<a href="/tokens" class={ templ.KV("active", c.Nav == "tokens") }>API tokens</a>
+						<a href="/tokens" class={ templ.KV("active", c.Nav == "tokens") }>Tokens</a>
 					}
 				</nav>
 				if c.User != "" {
@@ -192,10 +195,16 @@ templ detailPage(v detailView) {
 								if p.Email != "" {
 									<a href={ templ.URL("mailto:" + p.Email) }>{ p.Email }</a>
 								}
+								if p.From == "calendar" {
+									<span class="muted">from the event</span>
+								}
 							</li>
 						}
 					</ul>
 				</dd>
+				if v.Events != nil {
+					@eventBlock(v)
+				}
 				if v.Entry.Meta.Source != "" {
 					<dt>Source</dt>
 					<dd>

@@ -270,17 +270,30 @@ func possessive(name string) string {
 // --- API tokens --------------------------------------------------------------
 
 type tokensView struct {
-	Chrome chrome
-	Tokens []state.APIToken
-	New    string // a token just created, shown once
-	Name   string
-	Error  string
+	Chrome    chrome
+	Tokens    []state.APIToken
+	CalTokens []state.APIToken // nil when there's no calendar
+	Calendar  bool
+	Username  string
+	DAVURL    string
+	New       string // a token just created, shown once
+	NewScope  string
+	Name      string
+	Error     string
+	ErrScope  string
 }
 
 func (u *UI) tokensView(r *http.Request) (tokensView, error) {
 	user, _ := currentUser(r)
-	toks, err := u.db.APITokens(user.ID)
-	return tokensView{Chrome: u.chrome(r, "tokens"), Tokens: toks}, err
+	v := tokensView{Chrome: u.chrome(r, "tokens"), Calendar: u.cal != nil, Username: calendarOwner(user), DAVURL: davURL(r)}
+	var err error
+	if v.Tokens, err = u.db.Tokens(user.ID, state.ScopeAPI); err != nil {
+		return v, err
+	}
+	if v.Calendar {
+		v.CalTokens, err = u.db.Tokens(user.ID, state.ScopeCalDAV)
+	}
+	return v, err
 }
 
 func (u *UI) tokens(w http.ResponseWriter, r *http.Request) {
@@ -295,24 +308,28 @@ func (u *UI) tokens(w http.ResponseWriter, r *http.Request) {
 func (u *UI) createToken(w http.ResponseWriter, r *http.Request) {
 	user, _ := currentUser(r)
 	name := strings.TrimSpace(r.PostFormValue("name"))
+	scope := state.ScopeAPI
+	if r.PostFormValue("scope") == state.ScopeCalDAV && u.cal != nil {
+		scope = state.ScopeCalDAV
+	}
 	if name == "" {
 		v, _ := u.tokensView(r)
-		v.Error = "Give the token a name, e.g. what will use it."
+		v.Error, v.ErrScope = "Give the token a name, e.g. what will use it.", scope
 		u.render(w, r, http.StatusUnprocessableEntity, tokensPage(v))
 		return
 	}
-	tok, err := u.db.CreateAPIToken(user.ID, name)
+	tok, err := u.db.CreateToken(user.ID, name, scope)
 	if err != nil {
 		u.fail(w, r, err)
 		return
 	}
-	u.log.Info("API token created", "user", user.Display(), "name", name)
+	u.log.Info("token created", "user", user.Display(), "name", name, "scope", scope)
 	v, err := u.tokensView(r)
 	if err != nil {
 		u.fail(w, r, err)
 		return
 	}
-	v.New, v.Name = tok, name
+	v.New, v.Name, v.NewScope = tok, name, scope
 	w.Header().Set("Cache-Control", "no-store")
 	u.render(w, r, http.StatusOK, tokensPage(v))
 }

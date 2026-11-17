@@ -138,3 +138,31 @@ func TestReopenKeepsData(t *testing.T) {
 		t.Fatalf("users after reopen: %d", len(users))
 	}
 }
+
+func TestTokenScopes(t *testing.T) {
+	db := open(t)
+	u, _ := db.Login("sub-1", "antonio", "", "", true)
+	api, _ := db.CreateAPIToken(u.ID, "script")
+	cal, err := db.CreateToken(u.ID, "iPhone", ScopeCalDAV)
+	if err != nil || !strings.HasPrefix(cal, "ktxcal_") {
+		t.Fatalf("caldav token: %q %v", cal, err)
+	}
+	if _, err := db.TokenUser(cal, ScopeAPI); err != ErrNotFound {
+		t.Error("calendar token accepted for the API")
+	}
+	if _, err := db.TokenUser(api, ScopeCalDAV); err != ErrNotFound {
+		t.Error("API token accepted for CalDAV")
+	}
+	if got, err := db.TokenUser(cal, ScopeCalDAV); err != nil || got.ID != u.ID {
+		t.Errorf("caldav lookup: %v", err)
+	}
+	if l, _ := db.Tokens(u.ID, ScopeCalDAV); len(l) != 1 || l[0].Name != "iPhone" {
+		t.Errorf("list: %+v", l)
+	}
+	if l, _ := db.APITokens(u.ID); len(l) != 1 || l[0].Name != "script" {
+		t.Errorf("api list: %+v", l)
+	}
+	if got, err := db.UserByUsername("ANTONIO"); err != nil || got.ID != u.ID {
+		t.Errorf("by username: %v", err)
+	}
+}

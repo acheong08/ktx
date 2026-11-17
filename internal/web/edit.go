@@ -65,9 +65,18 @@ func (u *UI) editTranscript(w http.ResponseWriter, r *http.Request) {
 	if e.Meta.DurationMinutes > 0 {
 		f.Duration = strconv.Itoa(e.Meta.DurationMinutes)
 	}
-	var lines []string
+	// People from the linked calendar event are left out (saving re-adds
+	// them from the event), unless they're all there is.
+	var lines, fromCal []string
 	for _, p := range e.Meta.Participants {
+		if p.From == "calendar" {
+			fromCal = append(fromCal, transcript.ParticipantLine(p))
+			continue
+		}
 		lines = append(lines, transcript.ParticipantLine(p))
+	}
+	if len(lines) == 0 {
+		lines = fromCal
 	}
 	f.Participants = strings.Join(lines, "\n")
 	f.Tags = strings.Join(e.Meta.Tags, ", ")

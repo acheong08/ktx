@@ -1,0 +1,155 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+)
+
+templ calendarPage(v calendarView) {
+	@layout("Calendar", v.Chrome) {
+		<h1>Calendar</h1>
+		<p class="lead">
+			Calls are linked to the event they were recorded in, by time, and get the event's guests as participants.
+			Everyone can see every calendar; only the owner can change one.
+		</p>
+		@flashBox(v.Flash)
+		if v.Report != nil {
+			<div class="flash ok">
+				<p>
+					Import into { v.Into }: { strconv.Itoa(v.Report.Added) } added, { strconv.Itoa(v.Report.Updated) } updated,
+					{ strconv.Itoa(v.Report.Unchanged) } unchanged, { strconv.Itoa(len(v.Report.Skipped)) } skipped.
+				</p>
+				if len(v.Report.Skipped) > 0 {
+					<details>
+						<summary>Skipped</summary>
+						<ul>
+							for _, s := range v.Report.Skipped {
+								<li>{ s }</li>
+							}
+						</ul>
+					</details>
+				}
+				if len(v.Report.Warnings) > 0 {
+					<details>
+						<summary>Warnings</summary>
+						<ul>
+							for _, s := range v.Report.Warnings {
+								<li>{ s }</li>
+							}
+						</ul>
+					</details>
+				}
+			</div>
+		}
+		<h2>Calendars</h2>
+		<table class="list">
+			<thead>
+				<tr><th>Calendar</th><th>Owner</th><th>Events</th><th>CalDAV path</th></tr>
+			</thead>
+			<tbody>
+				for _, c := range v.Calendars {
+					<tr>
+						<td>{ c.Cal.Title() }</td>
+						<td>
+							{ c.Cal.Owner }
+							if !c.Mine {
+								<span class="muted">(read-only for you)</span>
+							}
+						</td>
+						<td>{ strconv.Itoa(c.Events) }</td>
+						<td><code>{ davPath(v.Owner, c.Cal.Owner, c.Cal.ID) }</code></td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<div class="columns">
+			<form method="post" action="/calendar/import" enctype="multipart/form-data" class="settings">
+				<h3>Import an .ics file</h3>
+				<p class="muted">An export from Google Calendar, Apple Calendar or Outlook. Events are added or updated by UID; nothing is deleted, so importing again is safe.</p>
+				<label for="import-cal">Into</label>
+				<select id="import-cal" name="calendar">
+					for _, c := range v.Mine {
+						<option value={ c.ID }>{ c.Title() }</option>
+					}
+				</select>
+				<label for="import-file">File</label>
+				<input id="import-file" type="file" name="file" accept=".ics,text/calendar" required/>
+				<button type="submit" class="primary">Import</button>
+			</form>
+			<form method="post" action="/calendar" class="settings">
+				<h3>New calendar</h3>
+				<label for="cal-id">Id</label>
+				<input id="cal-id" name="id" type="text" value={ v.NewID } placeholder="e.g. work" pattern="[a-z0-9][a-z0-9_\-]*" required/>
+				<label for="cal-name">Name</label>
+				<input id="cal-name" name="name" type="text" value={ v.NewName } placeholder="e.g. Work"/>
+				<button type="submit">Create</button>
+			</form>
+		</div>
+		<h2>Connect a calendar app</h2>
+		<p>
+			Create a <a href="/tokens#calendar">calendar token</a>, then sign in with your ktx username
+			(<code>{ v.Owner }</code>) and the token as the password. Works while you're on the tailnet.
+		</p>
+		<ul>
+			<li><strong>iPhone:</strong> Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add CalDAV Account. Server <code>{ strings.TrimSuffix(strings.TrimPrefix(v.DAVURL, "https://"), "/dav/") }</code>.</li>
+			<li><strong>Thunderbird:</strong> New Calendar → On the Network. Location <code>{ v.DAVURL }</code>, then pick the calendars to show.</li>
+		</ul>
+		<h2>Last 7 days and next 14</h2>
+		if len(v.Problems) > 0 {
+			<div class="flash warn">
+				Some events can't be read:
+				<ul>
+					for _, p := range v.Problems {
+						<li>{ p }</li>
+					}
+				</ul>
+			</div>
+		}
+		if len(v.Events) == 0 {
+			<p class="muted">No events in this period.</p>
+		} else {
+			<table class="list">
+				<thead>
+					<tr><th>Day</th><th>Time</th><th>Event</th><th>Guests</th><th>Calendar</th><th>Transcript</th></tr>
+				</thead>
+				<tbody>
+					for _, e := range v.Events {
+						<tr>
+							<td>{ e.Day }</td>
+							<td>{ e.Time }</td>
+							<td>{ e.Occ.Summary }</td>
+							<td>{ guestList(e.Guests) }</td>
+							<td>{ e.Occ.Calendar }</td>
+							<td>
+								for _, t := range e.Transcripts {
+									<a href={ templ.URL("/transcripts/" + t.ID) }>{ t.Label() }</a>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ eventBlock(v detailView) {
+	<dt>Calendar event</dt>
+	<dd>
+		if l := v.Entry.Meta.CalendarEvent; l != nil && l.UID != "" {
+			{ l.Title } · { eventWhen(l) } · <span class="muted">{ l.Calendar }, { matchLabel(l.Match) }</span>
+		} else if l != nil && l.Match == "none" {
+			<span class="muted">none ({ matchLabel(l.Match) })</span>
+		} else {
+			<span class="muted">none found</span>
+		}
+		<form method="post" class="inline" action={ templ.URL("/transcripts/" + v.Entry.ID + "/event") }>
+			<select name="event" aria-label="Calendar event">
+				for _, c := range v.Events {
+					<option value={ c.Value } selected?={ c.Selected }>{ c.Label }</option>
+				}
+			</select>
+			<button type="submit">Set</button>
+		</form>
+	</dd>
+}

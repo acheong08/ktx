@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 
+	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
 	"github.com/acheong08/ktx/internal/gitrepo"
 	"github.com/acheong08/ktx/internal/secrets"
@@ -139,6 +140,8 @@ type authEnv struct {
 	ts  *httptest.Server
 	idp *fakeIDP
 	db  *state.DB
+	st  *store.Store
+	cal *calendar.Service
 }
 
 func setupAuth(t *testing.T) *authEnv {
@@ -159,6 +162,8 @@ func setupAuth(t *testing.T) *authEnv {
 	}
 	t.Cleanup(func() { db.Close() })
 	st := store.New(repo)
+	st.SetLinker(calendar.Linker{})
+	cal := calendar.NewService(repo, st.Relink)
 	box, _ := secrets.New(make([]byte, 32))
 	mgr := connectors.NewManager(db, box, st, quiet, stub{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,8 +177,8 @@ func setupAuth(t *testing.T) *authEnv {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	t.Cleanup(ts.Close)
 	auth := NewAuth(OIDCConfig{Issuer: idp.URL, ClientID: "ktx", ClientSecret: "client-secret", PublicURL: ts.URL, AdminGroup: "ktx-admins"}, db, quiet)
-	handler = New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr}).Handler()
-	return &authEnv{ts: ts, idp: idp, db: db}
+	handler = New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr, Calendar: cal}).Handler()
+	return &authEnv{ts: ts, idp: idp, db: db, st: st, cal: cal}
 }
 
 func (e *authEnv) browser() *env {
@@ -297,7 +302,7 @@ func TestConnectionsAndTokensPages(t *testing.T) {
 
 	// API tokens: shown once, then only listed; revoking removes them.
 	code, body, _ = member.do(t, "POST", "/tokens", url.Values{"name": {"import script"}})
-	tok := regexp.MustCompile(`<pre id="new-token">(ktx_[^<]+)</pre>`).FindStringSubmatch(body)
+	tok := regexp.MustCompile(`<pre id="new-token-api">(ktx_[^<]+)</pre>`).FindStringSubmatch(body)
 	if code != 200 || tok == nil {
 		t.Fatalf("create token: %d\n%s", code, body)
 	}

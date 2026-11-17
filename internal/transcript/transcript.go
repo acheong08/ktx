@@ -43,6 +43,9 @@ type Participant struct {
 	Email   string `yaml:"email,omitempty"`
 	Company string `yaml:"company,omitempty"`
 	Role    string `yaml:"role,omitempty"`
+	// From is "calendar" for people added from the linked calendar event;
+	// they are replaced whenever the link changes.
+	From string `yaml:"from,omitempty"`
 }
 
 // UnmarshalYAML accepts both the mapping and the string form.
@@ -72,6 +75,18 @@ type Meta struct {
 	Source          string        `yaml:"source"`
 	SourceID        string        `yaml:"source_id"`
 	Tags            []string      `yaml:"tags"`
+	// CalendarEvent is the event the call was recorded in (set by ktx).
+	CalendarEvent *EventLink `yaml:"calendar_event"`
+}
+
+// EventLink points at one occurrence of a calendar event.
+type EventLink struct {
+	UID          string `yaml:"uid"`
+	RecurrenceID string `yaml:"recurrence_id"`
+	Calendar     string `yaml:"calendar"` // "<owner>/<calendar id>"
+	Title        string `yaml:"title"`
+	Start        string `yaml:"start"`
+	Match        string `yaml:"match"` // exact, time, manual, or none (no event, set by a person)
 }
 
 // Doc is a parsed, validated transcript.
@@ -373,6 +388,39 @@ func ParseParticipantLines(text string) ([]Participant, []string) {
 		out = append(out, p)
 	}
 	return out, problems
+}
+
+// Node returns the value node of a top-level metadata key, or nil.
+// Changes made to it are kept by Render.
+func (d *Doc) Node(key string) *yaml.Node {
+	m := d.node
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// SetNode sets a top-level metadata key to a node, keeping its position if
+// it already exists.
+func (d *Doc) SetNode(key string, value *yaml.Node) {
+	m := d.node
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1] = value
+			return
+		}
+	}
+	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+}
+
+// Field returns a top-level scalar metadata value, or "".
+func (d *Doc) Field(key string) string {
+	if n := d.Node(key); n != nil && n.Kind == yaml.ScalarNode {
+		return n.Value
+	}
+	return ""
 }
 
 // Unset removes a top-level metadata key.

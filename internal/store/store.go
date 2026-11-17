@@ -43,11 +43,23 @@ type Repo interface {
 	View(fn func(root string) error) error
 }
 
+// Linker updates a transcript's links to other records (its calendar event).
+// It runs under the repository lock, on the working copy at root.
+type Linker interface {
+	// Link updates doc; prev is the stored version, if any. It reports
+	// whether doc changed.
+	Link(root string, doc, prev *transcript.Doc) (bool, error)
+}
+
 // Store reads and writes transcripts.
 type Store struct {
-	repo Repo
-	now  func() time.Time
+	repo   Repo
+	now    func() time.Time
+	linker Linker
 }
+
+// SetLinker makes every write link transcripts with l.
+func (s *Store) SetLinker(l Linker) { s.linker = l }
 
 // New returns a Store on repo.
 func New(repo Repo) *Store { return &Store{repo: repo, now: time.Now} }
@@ -277,12 +289,21 @@ func (s *Store) putOne(root string, it Item, user string) (PutResult, []string, 
 	doc.Set("id", doc.ID)
 	doc.Set("ingested_at", ingestedAt)
 	doc.Set("uploaded_by", user)
+	rel := path.Join(dir, doc.FileName()) // before linking, which may add participants
+	if s.linker != nil {
+		var prev *transcript.Doc
+		if old != nil {
+			prev, _, _ = transcript.ParseStored(old)
+		}
+		if _, err := s.linker.Link(root, doc, prev); err != nil {
+			return out, nil, fmt.Errorf("linking: %w", err)
+		}
+	}
 	content, err := doc.Render()
 	if err != nil {
 		return out, nil, err
 	}
 
-	rel := path.Join(dir, doc.FileName())
 	out.Path = rel
 	switch {
 	case existing == "":
@@ -423,6 +444,20 @@ func (s *Store) Edit(ctx context.Context, id, user string, apply func(doc *trans
 			return gitrepo.Change{}, err
 		}
 		fresh.ID = id
+		if s.linker != nil { // the date may have changed: re-match its event
+			linked, _, err := transcript.ParseStored(content)
+			if err != nil {
+				return gitrepo.Change{}, err
+			}
+			prev, _, _ := transcript.ParseStored(old)
+			if _, err := s.linker.Link(root, linked, prev); err != nil {
+				return gitrepo.Change{}, fmt.Errorf("linking: %w", err)
+			}
+			doc = linked
+			if content, err = doc.Render(); err != nil {
+				return gitrepo.Change{}, err
+			}
+		}
 
 		rel := path.Join(folderDir(fresh.Meta.Type), fresh.FileName())
 		out.Path = rel
@@ -527,6 +562,117 @@ func writeDeleted(root string, deleted map[string]string) error {
 		b.WriteString(strings.TrimSpace(id+" "+deleted[id]) + "\n")
 	}
 	return writeFile(root, DeletedFile, []byte(b.String()))
+}
+
+// Preparer is a Linker that can get ready to link many transcripts dated
+// within [from, to) at once.
+type Preparer interface {
+	Prepare(root string, from, to time.Time) (Linker, error)
+}
+
+// Relink re-runs the linker on every stored transcript and rewrites the
+// ones that changed, returning their paths. It runs under the repository
+// lock (inside another write, e.g. a calendar change), on root.
+func (s *Store) Relink(root string) ([]string, error) {
+	if s.linker == nil {
+		return nil, nil
+	}
+	type file struct {
+		rel string
+		doc *transcript.Doc
+	}
+	var files []file
+	var from, to time.Time
+	err := walk(root, func(rel string) error {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			return err
+		}
+		doc, _, err := transcript.ParseStored(raw)
+		if err != nil {
+			return nil // unreadable after hand edits; leave it alone
+		}
+		files = append(files, file{rel, doc})
+		if !doc.Start.IsZero() {
+			if from.IsZero() || doc.Start.Before(from) {
+				from = doc.Start
+			}
+			if doc.Start.After(to) {
+				to = doc.Start
+			}
+		}
+		return nil
+	})
+	if err != nil || len(files) == 0 {
+		return nil, err
+	}
+	linker := s.linker
+	if p, ok := linker.(Preparer); ok && !from.IsZero() {
+		if linker, err = p.Prepare(root, from, to.Add(time.Second)); err != nil {
+			return nil, err
+		}
+	}
+	var changed []string
+	for _, f := range files {
+		ok, err := linker.Link(root, f.doc, nil)
+		if err != nil {
+			return changed, err
+		}
+		if !ok {
+			continue
+		}
+		content, err := f.doc.Render()
+		if err != nil {
+			return changed, err
+		}
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(f.rel)), content, 0o644); err != nil {
+			return changed, err
+		}
+		changed = append(changed, f.rel)
+	}
+	return changed, nil
+}
+
+// EditLinks changes one transcript's links (front matter) with fn (which gets the
+// working copy root, under the lock) and commits it as subject. Nothing is
+// committed if the file doesn't change.
+func (s *Store) EditLinks(ctx context.Context, id, user, subject string, fn func(root string, doc *transcript.Doc) error) (PutResult, error) {
+	var out PutResult
+	res, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
+		rel, err := findByID(root, id)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		if rel == "" {
+			return gitrepo.Change{}, ErrNotFound
+		}
+		abs := filepath.Join(root, filepath.FromSlash(rel))
+		old, err := os.ReadFile(abs)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		doc, _, err := transcript.ParseStored(old)
+		if err != nil {
+			return gitrepo.Change{}, fmt.Errorf("%s: %w", rel, err)
+		}
+		if err := fn(root, doc); err != nil {
+			return gitrepo.Change{}, err
+		}
+		content, err := doc.Render()
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		out.Path = rel
+		if bytes.Equal(old, content) {
+			out.Result = ResultUnchanged
+			return gitrepo.Change{}, nil
+		}
+		out.Result = ResultUpdated
+		ch := gitrepo.Change{Paths: []string{rel}, Message: commitMessage(subject, Entry{Meta: doc.Meta, Path: rel}.Label(), doc.Start, id, "Changed-By: "+user)}
+		return ch, os.WriteFile(abs, content, 0o644)
+	})
+	out.Git = res
+	return out, err
 }
 
 // List reads every transcript, newest first.

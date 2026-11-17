@@ -1,5 +1,7 @@
 package web
 
+import "github.com/acheong08/ktx/internal/state"
+
 import "strconv"
 
 templ connectionsPage(v connectionsView) {
@@ -193,46 +195,60 @@ templ connectionFormPage(v connFormView) {
 }
 
 templ tokensPage(v tokensView) {
-	@layout("API tokens", v.Chrome) {
-		<h1>API tokens</h1>
+	@layout("Tokens", v.Chrome) {
+		<h1>Tokens</h1>
+		<h2 id="api">API tokens</h2>
 		<p class="lead">For scripts that upload transcripts (<code>POST /v1/transcripts</code> with <code>Authorization: Bearer …</code>). Uploads are attributed to you.</p>
-		if v.New != "" {
-			<div class="flash ok">
-				<p>Token “{ v.Name }” created. Copy it now; it won't be shown again.</p>
-				<div class="command">
-					<pre id="new-token">{ v.New }</pre>
-					<button type="button" data-copy="#new-token">Copy</button>
-				</div>
-			</div>
+		@tokenSection(v, "api", v.Tokens, "e.g. granola import script")
+		if v.Calendar {
+			<h2 id="calendar">Calendar tokens</h2>
+			<p class="lead">
+				For calendar apps (CalDAV). Sign in with username <code>{ v.Username }</code> and a token as the password;
+				server <code>{ v.DAVURL }</code>. A calendar token only works for calendars, and only as you.
+			</p>
+			@tokenSection(v, "caldav", v.CalTokens, "e.g. iPhone")
 		}
-		if v.Error != "" {
-			@flashBox(flash{"error", v.Error})
-		}
-		if len(v.Tokens) > 0 {
-			<table class="list">
-				<thead>
-					<tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
-				</thead>
-				<tbody>
-					for _, t := range v.Tokens {
-						<tr>
-							<td>{ t.Name }</td>
-							<td>{ ago(t.CreatedAt) }</td>
-							<td>{ ago(t.LastUsedAt) }</td>
-							<td class="actions">
-								<form method="post" action={ templ.URL("/tokens/" + strconv.FormatInt(t.ID, 10) + "/delete") }>
-									<button type="submit">Revoke</button>
-								</form>
-							</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-		}
-		<form method="post" action="/tokens" class="settings">
-			<label for="name">New token</label>
-			<input id="name" name="name" type="text" placeholder="e.g. granola import script" required/>
-			<button type="submit" class="primary">Create token</button>
-		</form>
 	}
+}
+
+templ tokenSection(v tokensView, scope string, toks []state.APIToken, placeholder string) {
+	if v.New != "" && v.NewScope == scope {
+		<div class="flash ok">
+			<p>Token “{ v.Name }” created. Copy it now; it won't be shown again.</p>
+			<div class="command">
+				<pre id={ "new-token-" + scope }>{ v.New }</pre>
+				<button type="button" data-copy={ "#new-token-" + scope }>Copy</button>
+			</div>
+		</div>
+	}
+	if v.Error != "" && v.ErrScope == scope {
+		@flashBox(flash{"error", v.Error})
+	}
+	if len(toks) > 0 {
+		<table class="list">
+			<thead>
+				<tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
+			</thead>
+			<tbody>
+				for _, t := range toks {
+					<tr>
+						<td>{ t.Name }</td>
+						<td>{ ago(t.CreatedAt) }</td>
+						<td>{ ago(t.LastUsedAt) }</td>
+						<td class="actions">
+							<form method="post" action={ templ.URL("/tokens/" + strconv.FormatInt(t.ID, 10) + "/delete") }>
+								<button type="submit">Revoke</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+	<form method="post" action="/tokens" class="settings">
+		<input type="hidden" name="scope" value={ scope }/>
+		<label for={ "name-" + scope }>New token</label>
+		<input id={ "name-" + scope } name="name" type="text" placeholder={ placeholder } required/>
+		<button type="submit" class="primary">Create token</button>
+	</form>
 }

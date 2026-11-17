@@ -115,27 +115,47 @@ func (s *DB) DeleteSession(token string) error {
 	return err
 }
 
-// APIToken is a token for scripts and connectors calling the API.
+// Token scopes: what a token may be used for.
+const (
+	ScopeAPI    = "api"    // POST /v1/... (uploads)
+	ScopeCalDAV = "caldav" // calendar clients, as the password for Basic auth
+)
+
+// APIToken is a token for scripts (scope api) or calendar clients (scope caldav).
 type APIToken struct {
 	ID         int64
 	UserID     int64
 	Name       string
+	Scope      string
 	CreatedAt  time.Time
 	LastUsedAt time.Time
 }
 
-// CreateAPIToken makes a token for a user. The token itself is returned
-// once; only its hash is stored.
+// CreateAPIToken makes an API-scoped token for a user.
 func (s *DB) CreateAPIToken(userID int64, name string) (string, error) {
-	token, hash := newToken("ktx_")
-	_, err := s.db.Exec(`INSERT INTO api_tokens (user_id, name, token_hash, created_at) VALUES (?, ?, ?, ?)`,
-		userID, name, hash, s.stamp())
+	return s.CreateToken(userID, name, ScopeAPI)
+}
+
+// CreateToken makes a token with a scope. The token itself is returned
+// once; only its hash is stored.
+func (s *DB) CreateToken(userID int64, name, scope string) (string, error) {
+	prefix := "ktx_"
+	if scope == ScopeCalDAV {
+		prefix = "ktxcal_"
+	}
+	token, hash := newToken(prefix)
+	_, err := s.db.Exec(`INSERT INTO api_tokens (user_id, name, token_hash, scope, created_at) VALUES (?, ?, ?, ?, ?)`,
+		userID, name, hash, scope, s.stamp())
 	return token, err
 }
 
-// APITokens lists a user's tokens.
-func (s *DB) APITokens(userID int64) ([]APIToken, error) {
-	rows, err := s.db.Query(`SELECT id, user_id, name, created_at, last_used_at FROM api_tokens WHERE user_id = ? ORDER BY id`, userID)
+// APITokens lists a user's API-scoped tokens.
+func (s *DB) APITokens(userID int64) ([]APIToken, error) { return s.Tokens(userID, ScopeAPI) }
+
+// Tokens lists a user's tokens with a scope.
+func (s *DB) Tokens(userID int64, scope string) ([]APIToken, error) {
+	rows, err := s.db.Query(`SELECT id, user_id, name, scope, created_at, last_used_at FROM api_tokens
+		WHERE user_id = ? AND scope = ? ORDER BY id`, userID, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +164,7 @@ func (s *DB) APITokens(userID int64) ([]APIToken, error) {
 	for rows.Next() {
 		var t APIToken
 		var created, last sql.NullString
-		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &created, &last); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &t.Scope, &created, &last); err != nil {
 			return nil, err
 		}
 		t.CreatedAt, t.LastUsedAt = parseTime(created), parseTime(last)
@@ -153,7 +173,7 @@ func (s *DB) APITokens(userID int64) ([]APIToken, error) {
 	return out, rows.Err()
 }
 
-// DeleteAPIToken revokes one of a user's tokens.
+// DeleteAPIToken revokes one of a user's tokens (any scope).
 func (s *DB) DeleteAPIToken(userID, id int64) error {
 	res, err := s.db.Exec(`DELETE FROM api_tokens WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
@@ -165,17 +185,29 @@ func (s *DB) DeleteAPIToken(userID, id int64) error {
 	return nil
 }
 
-// APITokenUser returns the owner of a token and marks it used.
-func (s *DB) APITokenUser(token string) (User, error) {
+// APITokenUser returns the owner of an API-scoped token and marks it used.
+func (s *DB) APITokenUser(token string) (User, error) { return s.TokenUser(token, ScopeAPI) }
+
+// TokenUser returns the owner of a token with the given scope and marks it
+// used. A token of another scope is not found.
+func (s *DB) TokenUser(token, scope string) (User, error) {
+	if token == "" {
+		return User{}, ErrNotFound
+	}
 	hash := hashToken(token)
 	u, err := scanUser(s.db.QueryRow(`
 		SELECT `+prefixed("u.", userCols)+` FROM api_tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.token_hash = ?`, hash))
+		WHERE t.token_hash = ? AND t.scope = ?`, hash, scope))
 	if err != nil {
 		return User{}, err
 	}
 	_, _ = s.db.Exec(`UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?`, s.stamp(), hash)
 	return u, nil
+}
+
+// UserByUsername returns a user by username (case-insensitive).
+func (s *DB) UserByUsername(username string) (User, error) {
+	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE lower(username) = lower(?)`, username))
 }
 
 // prefixed turns "a, b" into "p.a, p.b".

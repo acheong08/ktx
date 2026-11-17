@@ -13,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/config"
 	"github.com/acheong08/ktx/internal/connectors"
 	"github.com/acheong08/ktx/internal/connectors/granola"
 	"github.com/acheong08/ktx/internal/connectors/pocket"
+	"github.com/acheong08/ktx/internal/dav"
 	"github.com/acheong08/ktx/internal/gitrepo"
 	"github.com/acheong08/ktx/internal/secrets"
 	"github.com/acheong08/ktx/internal/server"
@@ -79,6 +81,8 @@ func run(log *slog.Logger) error {
 	}
 
 	st := store.New(repo)
+	st.SetLinker(calendar.Linker{}) // link transcripts to the calendar event they were recorded in
+	cal := calendar.NewService(repo, st.Relink)
 
 	db, err := state.Open(cfg.StatePath)
 	if err != nil {
@@ -114,6 +118,7 @@ func run(log *slog.Logger) error {
 
 	mux := http.NewServeMux()
 	server.New(st, cfg.Tokens, db, cfg.MaxUploadBytes, log).Register(mux)
+	dav.New(cal, db, log).Register(mux) // CalDAV, with calendar tokens
 	var types []string
 	for _, t := range cfg.Types {
 		if t, err = transcript.NormalizeType(t); err != nil {
@@ -123,7 +128,7 @@ func run(log *slog.Logger) error {
 			types = append(types, t)
 		}
 	}
-	ui := web.Options{Store: st, Types: types, Log: log, DB: db, Auth: auth}
+	ui := web.Options{Store: st, Types: types, Log: log, DB: db, Auth: auth, Calendar: cal}
 	if auth != nil {
 		ui.Connectors = conns // connections belong to people, so they need sign-in
 	}

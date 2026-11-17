@@ -108,6 +108,8 @@ var migrations = []string{
 		error         TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX runs_by_connection ON runs(connection_id, id DESC);`,
+	// Tokens get a scope: "api" (uploads) or "caldav" (calendar clients).
+	`ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'api';`,
 }
 
 func (s *DB) migrate() error {

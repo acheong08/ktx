@@ -8,6 +8,7 @@ A small Go server that owns a clone of the brain git repository.
 - **Upload:** you send a transcript over HTTP. The server checks its metadata, writes it to `transcripts/<type>/` (or `transcripts/unsorted/`), commits, and pushes to GitHub.
 - **Web UI:** you can read, search and sort transcripts in a browser. People sign in through Pocket ID (passkeys).
 - **Connectors:** ktx pulls meeting notes from Granola on a schedule into `transcripts/meetings/`. Each person adds their own credential in the UI; it's stored encrypted.
+- **Calendar:** ktx is a CalDAV server (Apple Calendar, Thunderbird). Calendars live in the repo as `.ics` files, and every transcript is linked to the event it was recorded in, which gives it the guests' email addresses.
 
 ```
 API client ──POST /v1/transcripts──┐
@@ -121,7 +122,7 @@ With `BRAIN_OIDC_ISSUER` set, every page needs sign-in through the identity prov
 - **What else protects the UI:** cross-origin form posts are refused, and a strict Content-Security-Policy applies (`script-src 'self'`, no inline scripts or eval). Because of that CSP, htmx features that evaluate JavaScript (`hx-on`, `js:` values, trigger filters) won't work. Put such behaviour in `static/app.js`.
 - **Without `BRAIN_OIDC_ISSUER`** the UI is open to anyone who can reach it, and the Connections and API tokens pages are hidden. Only acceptable on a private network.
 
-### API tokens
+### Tokens
 
 The **API tokens** page lets each person create tokens for scripts (`POST /v1/transcripts`). A token is shown once, stored only as a hash, and uploads made with it are attributed to its owner. `BRAIN_API_TOKENS` still works for fixed tokens.
 
@@ -161,6 +162,54 @@ How a run works ([internal/connectors](internal/connectors/connectors.go)):
 ```sh
 go tool templ generate -path internal/web   # after changing views.templ; commit the generated views_templ.go
 ```
+
+## Calendar
+
+Calendars are stored in the brain repo, one `.ics` file per event (a repeating event and its changed occurrences share a file):
+
+```
+calendar/<owner>/<calendar>/calendar.json      name, colour, description
+calendar/<owner>/<calendar>/<uid>.ics          one event
+```
+
+Every change, from a calendar app or the UI, is one commit (`Calendar: add "Acme intro" (antonio/personal)`, with `Changed-By:`).
+
+**Who can see what:** everyone sees every calendar; only its owner can change it. Over CalDAV, other people's calendars appear as read-only, named `Personal (maxim)`.
+
+**Connecting an app:** make a calendar token on **Tokens** (separate from API tokens: a calendar token only works for CalDAV, and an API token never does). Sign in with your ktx username and the token as the password. Tailnet only.
+- **iPhone:** Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add CalDAV Account; server `brain.internal.melzi.dev`.
+- **Thunderbird:** New Calendar → On the Network; location `https://brain.internal.melzi.dev/dav/`.
+
+The first sign-in creates a `personal` calendar. Clients can create more (MKCALENDAR or extended MKCOL), or use the **Calendar** page.
+
+**Seeding from an export:** **Calendar** → Import an .ics file (Google, Apple and Outlook exports, up to 50 MB). Events are upserted by UID; nothing is deleted, so importing again is safe. The page reports what was added, updated, unchanged and skipped (tasks, events without a UID), and lists the last 7 and next 14 days with the transcripts linked to each event.
+
+**CalDAV support:** discovery (`/.well-known/caldav`, principal, home set), PROPFIND, calendar-query with time ranges (repeating events expanded), calendar-multiget, GET/PUT/DELETE with ETags and `If-Match`/`If-None-Match`, and `getctag` for change detection. Not supported: sync-collection (clients fall back to ETags), scheduling (invitations aren't emailed), free/busy, tasks.
+
+### Linking transcripts to events
+
+When a transcript is stored, and whenever calendars change, ktx looks for the event it was recorded in, across everyone's calendars:
+
+1. **Exact:** the recording names its event (Granola's `calendar_event_id`, including Google's per-occurrence ids).
+2. **By time:** an event (not all-day) that started within 15 minutes of the call, or that the call started during. An event with guests beats one without; then the nearest start; then the title most like the call's. A tie is no match. The same event in several calendars counts once.
+
+The result goes into the transcript's front matter, and the event's organizer and guests (minus declined ones and rooms) are added to its participants, marked `from: calendar`:
+
+```yaml
+calendar_event:
+  uid: 2su99n6iiik37iiknmb5t4fkfh@google.com
+  recurrence_id: "2026-11-14T18:00:00Z"   # only for one occurrence of a repeating event
+  calendar: maxim/personal
+  title: Acme <> Melzi
+  start: "2026-11-14T18:00:00Z"
+  match: time                             # exact, time, manual, none
+participants:
+  - name: Jane Doe
+    email: jane@acme.com
+    from: calendar
+```
+
+Those emails are the link to Folk (people are matched by email); no Folk ids are stored. On a transcript's page you can pick another event, say there is none, or go back to automatic. A choice made by hand (`manual`, `none`) is never changed automatically. Calendar participants are replaced whenever the link changes, and are left out of the edit form (saving re-adds them).
 
 ## Configuration
 

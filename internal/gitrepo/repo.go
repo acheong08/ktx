@@ -234,13 +234,13 @@ func (r *Repo) hasRemoteBranch(ctx context.Context) bool {
 	return err == nil
 }
 
-// revert discards uncommitted changes to paths written by a failed update.
+// revert discards uncommitted changes to paths (files or folders) written
+// by a failed update, including new untracked files under them.
 func (r *Repo) revert(ctx context.Context, paths []string) {
 	for _, p := range paths {
 		_, _ = r.git(ctx, "reset", "--quiet", "--", p)
-		if _, err := r.git(ctx, "checkout", "--", p); err != nil {
-			_ = os.Remove(filepath.Join(r.opt.Dir, p)) // untracked new file
-		}
+		_, _ = r.git(ctx, "checkout", "--", p)
+		_, _ = r.git(ctx, "clean", "-fdq", "--", p)
 	}
 }
 
