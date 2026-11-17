@@ -243,3 +243,28 @@ func gitLog(t *testing.T, remote string) string {
 	out, _ := exec.Command("git", "--git-dir", remote, "log", "-1", "--format=%B", "main").CombinedOutput()
 	return string(out)
 }
+
+func TestDeleteTranscript(t *testing.T) {
+	e := setup(t)
+	id := put(t, e.st, "---\ntitle: Board prep\ndate: 2026-11-01T10:00:00Z\ntype: investor\nparticipants: [Bob]\nsource: granola\nsource_id: b\n---\nNumbers.\n")
+	_, body, _ := e.do(t, "GET", "/transcripts/"+id, nil)
+	if !strings.Contains(body, `action="/transcripts/`+id+`/delete"`) {
+		t.Fatal("no delete form")
+	}
+	if code, body, _ := e.do(t, "POST", "/transcripts/"+id+"/delete", url.Values{}); code != http.StatusUnprocessableEntity || !strings.Contains(body, "Tick the box") {
+		t.Errorf("unconfirmed: %d", code)
+	}
+	if _, err := e.st.Get(id); err != nil {
+		t.Fatal("deleted without confirmation")
+	}
+	code, body, _ := e.do(t, "POST", "/transcripts/"+id+"/delete", url.Values{"confirm": {"on"}}, "X-Forwarded-For", "100.64.0.3")
+	if code != 200 || !strings.Contains(body, "Deleted “Board prep”") {
+		t.Fatalf("delete: %d\n%s", code, body)
+	}
+	if _, err := e.st.Get(id); err == nil {
+		t.Error("still there")
+	}
+	if msg := gitLog(t, e.remote); !strings.Contains(msg, "Delete transcript: Board prep") || !strings.Contains(msg, "Changed-By: web UI (100.64.0.3)") {
+		t.Errorf("commit:\n%s", msg)
+	}
+}

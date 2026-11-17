@@ -115,6 +115,7 @@ func (u *UI) Handler() http.Handler {
 	mux.HandleFunc("GET /transcripts/{id}", u.page(u.detail))
 	mux.HandleFunc("GET /transcripts/{id}/edit", u.page(u.editTranscript))
 	mux.HandleFunc("POST /transcripts/{id}", u.page(u.saveTranscript))
+	mux.HandleFunc("POST /transcripts/{id}/delete", u.page(u.deleteTranscript))
 	mux.HandleFunc("POST /transcripts/{id}/type", u.page(u.setType))
 
 	if u.auth != nil && u.db != nil {
@@ -269,6 +270,9 @@ func (u *UI) list(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		u.fail(w, r, err)
 		return
+	}
+	if d := r.URL.Query().Get("deleted"); d != "" {
+		v.Flash = flash{"ok", "Deleted “" + d + "”. It stays in git history, and connector syncs won't bring it back."}
 	}
 	w.Header().Set("Vary", "HX-Request, HX-Request-Type")
 	if isPartial(r) {

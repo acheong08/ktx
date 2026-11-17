@@ -246,3 +246,54 @@ func TestEdit(t *testing.T) {
 		t.Errorf("missing: %v", err)
 	}
 }
+
+func TestDelete(t *testing.T) {
+	s, remote := newStore(t)
+	ctx := context.Background()
+	ra := put(t, s, a)
+	id := strings.TrimSuffix(ra.Path[strings.LastIndex(ra.Path, "-")+1:], ".md")
+
+	if _, err := s.Delete(ctx, id, "maxim"); err != nil {
+		t.Fatal(err)
+	}
+	tree := gitOut(t, "--git-dir", remote, "ls-tree", "-r", "--name-only", "main")
+	if tree != DeletedFile {
+		t.Errorf("tree after delete = %q", tree)
+	}
+	msg := gitOut(t, "--git-dir", remote, "log", "-1", "--format=%B", "main")
+	if !strings.HasPrefix(msg, "Delete transcript: Acme intro (2026-11-14)") || !strings.Contains(msg, "Changed-By: maxim") {
+		t.Errorf("message:\n%s", msg)
+	}
+	if !strings.Contains(gitOut(t, "--git-dir", remote, "show", "main:"+DeletedFile), id+" ") {
+		t.Error("id not recorded")
+	}
+	if _, err := s.Get(id); err != ErrNotFound {
+		t.Errorf("still readable: %v", err)
+	}
+	if _, err := s.Delete(ctx, id, "maxim"); err != ErrNotFound {
+		t.Errorf("second delete: %v", err)
+	}
+
+	// A connector sync of it is skipped; nothing is committed.
+	doc, _ := transcript.Parse([]byte(a))
+	res, _, err := s.PutBatch(ctx, []Item{{Doc: doc, Sync: true}}, "antonio", "Sync granola")
+	if err != nil || res[0].Result != ResultSkipped {
+		t.Fatalf("sync after delete: %+v %v", res, err)
+	}
+	if n := gitOut(t, "--git-dir", remote, "rev-list", "--count", "main"); n != "2" {
+		t.Errorf("commits = %s", n)
+	}
+
+	// A person re-uploading brings it back and clears the record.
+	again := put(t, s, a)
+	if again.Result != ResultCreated {
+		t.Fatalf("re-upload: %+v", again)
+	}
+	if strings.Contains(gitOut(t, "--git-dir", remote, "show", "main:"+DeletedFile), id) {
+		t.Error("record not cleared")
+	}
+	doc, _ = transcript.Parse([]byte(a))
+	if res, _, _ := s.PutBatch(ctx, []Item{{Doc: doc, Sync: true}}, "maxim", ""); res[0].Result != ResultUnchanged {
+		t.Errorf("sync after re-upload: %+v", res)
+	}
+}

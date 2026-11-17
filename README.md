@@ -106,6 +106,7 @@ No auth. Returns `{"ok":true}`.
 - **Transcript** (`/transcripts/<id>`):
   - Shows the metadata and the body rendered as Markdown. Raw HTML in transcripts is escaped.
   - **Edit** opens a form for the title, date and time zone, duration, type, participants, tags and the transcript itself (Markdown). Saving commits it (`Edit transcript: …`, `Changed-By:`), moving or renaming the file if the type, date or title changed. Keys the form doesn't show (`source_id`, links, `ingested_at`) are kept. Edits to a Granola or Pocket transcript last until the original changes there; the next sync then replaces them, and git keeps both.
+- **Delete** (bottom of a transcript, with a confirm box) removes the file in one commit (`Delete transcript: …`, `Changed-By:`). Its id is added to `.ktx/deleted` in the repo, so Granola or Pocket syncs don't bring it back. Uploading it again by hand (API or UI) restores it and clears the entry. Git history still has the file; truly erasing something means rewriting history.
 - **New transcript** (on the list): paste a transcript or notes and fill in the same fields. It's stored with `source: manual` and a random `source_id`, filed under its type (or unsorted).
 - **Type suggestions:** `BRAIN_TRANSCRIPT_TYPES` plus every folder that already exists. Any new name matching `[a-z0-9_-]` creates a folder.
 - **Built with** [templ](https://templ.guide) components and [htmx 4](https://four.htmx.org). htmx is vendored in `internal/web/static`, so the page loads nothing from a CDN.

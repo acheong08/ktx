@@ -227,6 +227,12 @@ templ detailPage(v detailView) {
 			<div class="body">
 				@templ.Raw(v.BodyHTML)
 			</div>
+			if v.Entry.ID != "" {
+				<form method="post" class="danger" action={ templ.URL("/transcripts/" + v.Entry.ID + "/delete") }>
+					<label class="check"><input type="checkbox" name="confirm"/> Delete this transcript. It stays in git history; connector syncs won't bring it back.</label>
+					<button type="submit">Delete</button>
+				</form>
+			}
 		</article>
 	}
 }

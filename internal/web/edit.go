@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -279,4 +280,34 @@ func formURL(v formView) templ.SafeURL {
 		return templ.URL("/transcripts")
 	}
 	return templ.URL("/transcripts/" + v.ID)
+}
+
+func (u *UI) deleteTranscript(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if r.PostFormValue("confirm") != "on" {
+		u.renderDetail(w, r, http.StatusUnprocessableEntity, id, flash{"error", "Tick the box to confirm deleting this transcript."})
+		return
+	}
+	e, err := u.store.Get(id)
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+	defer cancel()
+	res, err := u.store.Delete(ctx, id, actor(r))
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	u.log.Info("transcript deleted", "id", id, "path", res.Path, "user", actor(r), "commit", res.Git.Commit)
+	http.Redirect(w, r, listURL("", e.Folder, "")+sep(listURL("", e.Folder, ""))+"deleted="+url.QueryEscape(e.Label()), http.StatusSeeOther)
+}
+
+func sep(u string) string {
+	if strings.Contains(u, "?") {
+		return "&"
+	}
+	return "?"
 }

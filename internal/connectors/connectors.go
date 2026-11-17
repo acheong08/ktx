@@ -250,7 +250,7 @@ func (m *Manager) RunOnce(ctx context.Context, id int64, kind Connector, trigger
 				run.Created++
 			case store.ResultUpdated:
 				run.Updated++
-			case store.ResultUnchanged:
+			case store.ResultUnchanged, store.ResultSkipped:
 				run.Unchanged++
 			}
 		}
@@ -260,6 +260,7 @@ func (m *Manager) RunOnce(ctx context.Context, id int64, kind Connector, trigger
 		return err
 	}
 	emit := func(it store.Item) error {
+		it.Sync = true
 		batch = append(batch, it)
 		if len(batch) >= batchSize {
 			return flush()

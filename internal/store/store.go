@@ -123,11 +123,17 @@ const (
 	ResultCreated   = "created"
 	ResultUpdated   = "updated"
 	ResultUnchanged = "unchanged"
+	// ResultSkipped: a connector sync of a transcript someone deleted.
+	ResultSkipped = "skipped"
 )
 
 // Item is one document to store.
 type Item struct {
 	Doc *transcript.Doc
+	// Sync marks a document from a connector. Synced documents whose id was
+	// deleted are skipped (ResultSkipped), so deleting a transcript sticks;
+	// an upload by a person brings it back.
+	Sync bool
 	// DefaultType files a new document whose metadata has no type. It is
 	// ignored for documents already stored, so ones sorted by hand stay put.
 	DefaultType string
@@ -161,7 +167,20 @@ func (s *Store) PutBatch(ctx context.Context, items []Item, user, summary string
 	git, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
 		var ch gitrepo.Change
 		var changed []int
+		deleted, err := readDeleted(root)
+		if err != nil {
+			return ch, err
+		}
+		undeleted := false
 		for i, it := range items {
+			if _, gone := deleted[it.Doc.ID]; gone {
+				if it.Sync {
+					results[i] = PutResult{Result: ResultSkipped}
+					continue
+				}
+				delete(deleted, it.Doc.ID)
+				undeleted = true
+			}
 			res, paths, err := s.putOne(root, it, user)
 			ch.Paths = append(ch.Paths, paths...)
 			if err != nil {
@@ -171,6 +190,12 @@ func (s *Store) PutBatch(ctx context.Context, items []Item, user, summary string
 			if res.Result != ResultUnchanged {
 				changed = append(changed, i)
 			}
+		}
+		if undeleted {
+			if err := writeDeleted(root, deleted); err != nil {
+				return ch, err
+			}
+			ch.Paths = append(ch.Paths, DeletedFile)
 		}
 		if len(changed) == 0 {
 			return gitrepo.Change{}, nil
@@ -413,6 +438,80 @@ func (s *Store) Edit(ctx context.Context, id, user string, apply func(doc *trans
 	})
 	out.Git = res
 	return out, err
+}
+
+// DeletedFile lists the ids of deleted transcripts, one per line with when
+// and by whom, so connector syncs don't bring them back.
+const DeletedFile = ".ktx/deleted"
+
+// Delete removes a transcript in one commit and records its id in
+// DeletedFile. The file stays in git history.
+func (s *Store) Delete(ctx context.Context, id, user string) (PutResult, error) {
+	var out PutResult
+	res, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
+		existing, err := findByID(root, id)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		if existing == "" {
+			return gitrepo.Change{}, ErrNotFound
+		}
+		e, err := readEntry(root, existing)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		deleted, err := readDeleted(root)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		deleted[id] = s.now().UTC().Format(time.RFC3339) + " " + user
+		ch := gitrepo.Change{
+			Paths:   []string{existing, DeletedFile},
+			Message: commitMessage("Delete transcript", e.Label(), e.Start, id, "Changed-By: "+user),
+		}
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(existing))); err != nil {
+			return ch, err
+		}
+		out.Path, out.Result = existing, "deleted"
+		return ch, writeDeleted(root, deleted)
+	})
+	out.Git = res
+	return out, err
+}
+
+// readDeleted maps deleted ids to "<time> <user>".
+func readDeleted(root string) (map[string]string, error) {
+	out := map[string]string{}
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(DeletedFile)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		id, rest, _ := strings.Cut(line, " ")
+		out[id] = strings.TrimSpace(rest)
+	}
+	return out, nil
+}
+
+func writeDeleted(root string, deleted map[string]string) error {
+	ids := make([]string, 0, len(deleted))
+	for id := range deleted {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var b strings.Builder
+	b.WriteString("# Transcripts deleted in ktx: <id> <deleted at> <by>. Connector syncs skip these ids.\n")
+	for _, id := range ids {
+		b.WriteString(strings.TrimSpace(id+" "+deleted[id]) + "\n")
+	}
+	return writeFile(root, DeletedFile, []byte(b.String()))
 }
 
 // List reads every transcript, newest first.
