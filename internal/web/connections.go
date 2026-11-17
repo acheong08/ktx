@@ -123,7 +123,7 @@ func (u *UI) createConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.log.Info("connection added", "id", id, "kind", kind.Kind(), "user", user.Display())
-	http.Redirect(w, r, "/connections?done=created", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/connections?done=created", http.StatusSeeOther)
 }
 
 func (u *UI) loadConnection(w http.ResponseWriter, r *http.Request) (state.Connection, connectors.Connector, bool) {
@@ -183,7 +183,7 @@ func (u *UI) updateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.log.Info("connection updated", "id", c.ID, "user", user.Display())
-	http.Redirect(w, r, "/connections/"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/connections/"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
 }
 
 func (u *UI) syncConnection(w http.ResponseWriter, r *http.Request) {
@@ -195,9 +195,9 @@ func (u *UI) syncConnection(w http.ResponseWriter, r *http.Request) {
 		u.render(w, r, http.StatusConflict, errorPage(u.chrome(r, "connections"), "This connection isn't running (it's disabled, or no master key is configured)."))
 		return
 	}
-	to := "/connections?done=sync"
+	to := "/settings/connections?done=sync"
 	if r.PostFormValue("back") == "detail" {
-		to = "/connections/" + strconv.FormatInt(c.ID, 10)
+		to = "/settings/connections/" + strconv.FormatInt(c.ID, 10)
 	}
 	// Give the run a moment to register, so the next page shows it.
 	time.Sleep(300 * time.Millisecond)
@@ -223,7 +223,7 @@ func (u *UI) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.log.Info("connection deleted", "id", c.ID, "kind", c.Kind, "user", user.Display())
-	http.Redirect(w, r, "/connections?done=deleted", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/connections?done=deleted", http.StatusSeeOther)
 }
 
 // canEdit: the owner and admins may change or delete a connection.
@@ -341,7 +341,7 @@ func (u *UI) deleteToken(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/tokens", http.StatusSeeOther)
 }
 
 func (u *UI) forbidden(w http.ResponseWriter, r *http.Request) {
@@ -389,9 +389,9 @@ func shortSHA(s string) string {
 
 func formAction(v connFormView) templ.SafeURL {
 	if v.Conn == nil {
-		return templ.URL("/connections")
+		return templ.URL("/settings/connections")
 	}
-	return templ.URL("/connections/" + strconv.FormatInt(v.Conn.ID, 10))
+	return templ.URL("/settings/connections/" + strconv.FormatInt(v.Conn.ID, 10))
 }
 
 func secretPlaceholder(v connFormView, placeholder string) string {

@@ -97,7 +97,7 @@ table.transcripts { width: 100%; border-collapse: collapse; }
 .retype input { width: 14rem; }
 dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: 0 0 1.5rem; }
 dl.meta dt { color: var(--muted); }
-dl.meta dd { margin: 0; }
+dl.meta dd { margin: 0; min-width: 0; }
 ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain a { margin-left: .4rem; font-size: 14px; }
 .body { border-top: 1px solid var(--line); padding-top: 1rem; max-width: 75ch; }
@@ -115,7 +115,7 @@ table.list { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
 .list td.actions { text-align: right; white-space: nowrap; }
 .kinds { list-style: none; padding: 0; display: grid; gap: .5rem; }
 .kinds li { display: flex; gap: .75rem; align-items: baseline; }
-form.settings { display: grid; gap: .35rem; max-width: 34rem; margin: 1rem 0 2rem; }
+form.settings { display: grid; gap: .35rem; max-width: 34rem; margin: 1rem 0 2rem; align-content: start; }
 form.settings label { font-weight: 600; margin-top: .6rem; }
 form.settings button { justify-self: start; margin-top: .8rem; }
 .help { color: var(--muted); font-size: 13px; margin: 0; }
@@ -132,3 +132,64 @@ form.settings .row label { margin-top: .6rem; }
 textarea.mono, #participants { font-family: ui-monospace, Menlo, monospace; font-size: 13px; width: 100%; }
 .retype form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; flex: 1; }
 .retype { justify-content: space-between; }
+
+.settings-tabs { margin-bottom: 1.25rem; }
+.columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0 2rem; }
+.list code { word-break: break-all; }
+
+/* Phones: no sideways scrolling. Tables become stacked cards. */
+@media (max-width: 640px) {
+  main { padding: 1rem; }
+  header.top { flex-wrap: wrap; gap: .25rem 1rem; padding: .5rem 1rem; }
+  header nav { order: 3; flex-basis: 100%; gap: 1.25rem; }
+  .account { margin-left: auto; gap: .5rem; font-size: 14px; }
+  h1 { font-size: 1.3rem; }
+  input, select, textarea { font-size: 16px; } /* stops iOS zooming into fields */
+  input[type=text], input[type=search], input[type=email], input[type=url], input[type=password], select, textarea { max-width: 100%; }
+
+  .filters { flex-wrap: wrap; }
+  .filters input[type=search] { flex-basis: 100%; }
+  .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .tab { white-space: nowrap; }
+  .sort-next { margin-left: .5rem; white-space: nowrap; }
+  .bulk input[type=text] { flex: 1; width: auto; min-width: 0; }
+  .bulk label { flex-basis: 100%; }
+
+  /* Transcript rows: checkbox on the left, everything else stacked. */
+  table.transcripts, .transcripts thead, .transcripts tbody { display: block; }
+  .transcripts thead tr { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+  .transcripts thead th { border: 0; }
+  .transcripts thead th:not(.pick) { display: none; }
+  .transcripts thead th.pick::after { content: "Select all"; margin-left: .5rem; font-weight: normal; }
+  .transcripts thead th.pick { display: flex; align-items: center; width: auto; white-space: nowrap; }
+  .transcripts tbody tr { display: grid; grid-template-columns: 2rem 1fr; border-bottom: 1px solid var(--line); padding: .5rem 0; }
+  .transcripts td { border: 0; padding: .1rem 0; grid-column: 2; }
+  .transcripts td.pick { grid-column: 1; grid-row: 1 / span 4; padding-top: .2rem; }
+  .transcripts td.date { font-size: 13px; }
+  .transcripts td.type input { width: 100%; }
+
+  /* Settings tables: one card per row, cells labelled from the header. */
+  table.list, .list tbody, .list tr, .list td { display: block; }
+  .list thead { display: none; }
+  .list tr { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .75rem; margin-bottom: .75rem; }
+  .list td { border: 0; padding: .15rem 0; }
+  .list td[data-label] { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .5rem; }
+  .list td[data-label]::before { content: attr(data-label); font-size: 13px; color: var(--muted); }
+  .list td.actions { text-align: left; }
+  .list td:empty { display: none; }
+
+  dl.meta { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  dl.meta dd { min-width: 0; }
+  form.inline select { width: 100%; }
+  dl.meta dt { margin-top: .6rem; font-size: 13px; }
+  .retype input { width: auto; flex: 1; min-width: 0; }
+  form.danger { flex-direction: column; align-items: flex-start; }
+  form.settings { max-width: 100%; }
+  form.inline select { max-width: 100%; }
+  .command { flex-direction: column; }
+  .body { overflow-wrap: anywhere; }
+  .body pre { overflow-x: auto; }
+  .body table { display: block; overflow-x: auto; }
+}
+form.settings h3 { margin: 0; }
+form.settings h3 + p { margin: .25rem 0 0; }

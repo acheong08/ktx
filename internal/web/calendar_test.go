@@ -53,7 +53,7 @@ func upload(t *testing.T, b *env, calID, ics string) (int, string) {
 	fw, _ := mw.CreateFormFile("file", "export.ics")
 	fw.Write([]byte(ics))
 	mw.Close()
-	req, _ := http.NewRequest("POST", b.ts.URL+"/calendar/import", &buf)
+	req, _ := http.NewRequest("POST", b.ts.URL+"/settings/calendar/import", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestCalendarUI(t *testing.T) {
 	e.signIn(t, max, idpUser{sub: "u2", username: "maxim", groups: []string{"melzi"}}, "/")
 
 	// A first visit makes a personal calendar.
-	code, body, _ := ant.do(t, "GET", "/calendar", nil)
+	code, body, _ := ant.do(t, "GET", "/settings/calendar", nil)
 	if code != 200 || !strings.Contains(body, "/dav/antonio/calendars/personal/") {
 		t.Fatalf("calendar page: %d\n%s", code, body)
 	}
@@ -113,7 +113,7 @@ func TestCalendarUI(t *testing.T) {
 	}
 
 	// Maxim sees Antonio's calendar, read-only, and can only import into his own.
-	_, body, _ = max.do(t, "GET", "/calendar", nil)
+	_, body, _ = max.do(t, "GET", "/settings/calendar", nil)
 	if !strings.Contains(body, "/dav/maxim/calendars/antonio~personal/") || !strings.Contains(body, "read-only for you") {
 		t.Errorf("maxim's view:\n%s", body)
 	}
@@ -122,7 +122,7 @@ func TestCalendarUI(t *testing.T) {
 	}
 
 	// Calendar tokens are a separate scope.
-	_, body, _ = ant.do(t, "POST", "/tokens", url.Values{"name": {"iPhone"}, "scope": {"caldav"}})
+	_, body, _ = ant.do(t, "POST", "/settings/tokens", url.Values{"name": {"iPhone"}, "scope": {"caldav"}})
 	tok := regexp.MustCompile(`<pre id="new-token-caldav">(ktxcal_[^<]+)</pre>`).FindStringSubmatch(body)
 	if tok == nil {
 		t.Fatalf("calendar token:\n%s", body)

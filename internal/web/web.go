@@ -126,24 +126,48 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("POST /transcripts/{id}/event", u.page(u.setEvent))
 	}
 	if u.auth != nil && u.cal != nil {
-		mux.HandleFunc("GET /calendar", u.page(u.calendarPage))
-		mux.HandleFunc("POST /calendar", u.page(u.createCalendar))
-		mux.HandleFunc("POST /calendar/import", u.page(u.importCalendar))
+		mux.HandleFunc("GET /settings/calendar", u.page(u.calendarPage))
+		mux.HandleFunc("POST /settings/calendar", u.page(u.createCalendar))
+		mux.HandleFunc("POST /settings/calendar/import", u.page(u.importCalendar))
 	}
 
 	if u.auth != nil && u.db != nil {
-		mux.HandleFunc("GET /tokens", u.page(u.tokens))
-		mux.HandleFunc("POST /tokens", u.page(u.createToken))
-		mux.HandleFunc("POST /tokens/{id}/delete", u.page(u.deleteToken))
+		mux.HandleFunc("GET /settings/tokens", u.page(u.tokens))
+		mux.HandleFunc("POST /settings/tokens", u.page(u.createToken))
+		mux.HandleFunc("POST /settings/tokens/{id}/delete", u.page(u.deleteToken))
 	}
 	if u.auth != nil && u.conns != nil {
-		mux.HandleFunc("GET /connections", u.page(u.connections))
-		mux.HandleFunc("GET /connections/new", u.page(u.newConnection))
-		mux.HandleFunc("POST /connections", u.page(u.createConnection))
-		mux.HandleFunc("GET /connections/{id}", u.page(u.connection))
-		mux.HandleFunc("POST /connections/{id}", u.page(u.updateConnection))
-		mux.HandleFunc("POST /connections/{id}/sync", u.page(u.syncConnection))
-		mux.HandleFunc("POST /connections/{id}/delete", u.page(u.deleteConnection))
+		mux.HandleFunc("GET /settings/connections", u.page(u.connections))
+		mux.HandleFunc("GET /settings/connections/new", u.page(u.newConnection))
+		mux.HandleFunc("POST /settings/connections", u.page(u.createConnection))
+		mux.HandleFunc("GET /settings/connections/{id}", u.page(u.connection))
+		mux.HandleFunc("POST /settings/connections/{id}", u.page(u.updateConnection))
+		mux.HandleFunc("POST /settings/connections/{id}/sync", u.page(u.syncConnection))
+		mux.HandleFunc("POST /settings/connections/{id}/delete", u.page(u.deleteConnection))
+	}
+
+	// Settings: /settings opens the first section; the old top-level
+	// addresses redirect.
+	mux.HandleFunc("GET /settings", u.page(func(w http.ResponseWriter, r *http.Request) {
+		c := u.chrome(r, "")
+		switch {
+		case c.Connections:
+			http.Redirect(w, r, "/settings/connections", http.StatusSeeOther)
+		case c.Calendar:
+			http.Redirect(w, r, "/settings/calendar", http.StatusSeeOther)
+		case c.Tokens:
+			http.Redirect(w, r, "/settings/tokens", http.StatusSeeOther)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	for _, old := range []string{"connections", "calendar", "tokens"} {
+		mux.HandleFunc("GET /"+old+"/", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/settings"+r.URL.RequestURI(), http.StatusMovedPermanently)
+		})
+		mux.HandleFunc("GET /"+old, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/settings"+r.URL.RequestURI(), http.StatusMovedPermanently)
+		})
 	}
 
 	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))
@@ -203,6 +227,14 @@ type chrome struct {
 	Tokens      bool
 	Calendar    bool
 	Nav         string // active section
+}
+
+// HasSettings reports whether any settings page is available.
+func (c chrome) HasSettings() bool { return c.Connections || c.Calendar || c.Tokens }
+
+// InSettings reports whether the page is one of the settings pages.
+func (c chrome) InSettings() bool {
+	return c.Nav == "connections" || c.Nav == "calendar" || c.Nav == "tokens"
 }
 
 func (u *UI) chrome(r *http.Request, nav string) chrome {

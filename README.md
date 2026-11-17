@@ -178,13 +178,13 @@ Every change, from a calendar app or the UI, is one commit (`Calendar: add "Acme
 
 **Who can see what:** everyone sees every calendar; only its owner can change it. Over CalDAV, other people's calendars appear as read-only, named `Personal (maxim)`.
 
-**Connecting an app:** make a calendar token on **Tokens** (separate from API tokens: a calendar token only works for CalDAV, and an API token never does). Sign in with your ktx username and the token as the password. Tailnet only.
+**Connecting an app:** make a calendar token on **Settings → Tokens** (separate from API tokens: a calendar token only works for CalDAV, and an API token never does). Sign in with your ktx username and the token as the password. Tailnet only.
 - **iPhone:** Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add CalDAV Account; server `brain.internal.melzi.dev`.
 - **Thunderbird:** New Calendar → On the Network; location `https://brain.internal.melzi.dev/dav/`.
 
-The first sign-in creates a `personal` calendar. Clients can create more (MKCALENDAR or extended MKCOL), or use the **Calendar** page.
+The first sign-in creates a `personal` calendar. Clients can create more (MKCALENDAR or extended MKCOL), or use **Settings → Calendar**.
 
-**Seeding from an export:** **Calendar** → Import an .ics file (Google, Apple and Outlook exports, up to 50 MB). Events are upserted by UID; nothing is deleted, so importing again is safe. The page reports what was added, updated, unchanged and skipped (tasks, events without a UID), and lists the last 7 and next 14 days with the transcripts linked to each event.
+**Seeding from an export:** **Settings → Calendar** → Import an .ics file (Google, Apple and Outlook exports, up to 50 MB). Events are upserted by UID; nothing is deleted, so importing again is safe. The page reports what was added, updated, unchanged and skipped (tasks, events without a UID), and lists the last 7 and next 14 days with the transcripts linked to each event.
 
 **CalDAV support:** discovery (`/.well-known/caldav`, principal, home set), PROPFIND, calendar-query with time ranges (repeating events expanded), calendar-multiget, GET/PUT/DELETE with ETags and `If-Match`/`If-None-Match`, and `getctag` for change detection. Not supported: sync-collection (clients fall back to ETags), scheduling (invitations aren't emailed), free/busy, tasks.
 

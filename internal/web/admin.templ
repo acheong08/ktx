@@ -17,7 +17,7 @@ templ connectionsPage(v connectionsView) {
 		<ul class="kinds">
 			for _, k := range v.Kinds {
 				<li>
-					<a class="button" href={ templ.URL("/connections/new?kind=" + k.Kind()) }>{ k.Title() }</a>
+					<a class="button" href={ templ.URL("/settings/connections/new?kind=" + k.Kind()) }>{ k.Title() }</a>
 					<span class="muted">{ k.Description() }</span>
 				</li>
 			}
@@ -26,7 +26,7 @@ templ connectionsPage(v connectionsView) {
 }
 
 templ connectionsTable(v connectionsView) {
-	<div id="connections" if v.Polling { hx-get="/connections" hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML" }>
+	<div id="connections" if v.Polling { hx-get="/settings/connections" hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML" }>
 		if len(v.Rows) == 0 {
 			<p class="empty">No connections yet.</p>
 		} else {
@@ -37,8 +37,8 @@ templ connectionsTable(v connectionsView) {
 				<tbody>
 					for _, row := range v.Rows {
 						<tr>
-							<td>
-								<a href={ templ.URL("/connections/" + strconv.FormatInt(row.Conn.ID, 10)) }>{ row.Conn.Label }</a>
+							<td data-label="Name">
+								<a href={ templ.URL("/settings/connections/" + strconv.FormatInt(row.Conn.ID, 10)) }>{ row.Conn.Label }</a>
 								if !row.Conn.Enabled {
 									<span class="badge">disabled</span>
 								}
@@ -46,9 +46,9 @@ templ connectionsTable(v connectionsView) {
 									<div class="sub">{ row.Conn.Account }</div>
 								}
 							</td>
-							<td>{ row.Title }</td>
-							<td>{ row.Conn.Owner }</td>
-							<td>
+							<td data-label="Service">{ row.Title }</td>
+							<td data-label="Owner">{ row.Conn.Owner }</td>
+							<td data-label="Last sync">
 								if row.Syncing {
 									<span class="badge ok">syncing…</span>
 								} else if row.Last != nil {
@@ -62,7 +62,7 @@ templ connectionsTable(v connectionsView) {
 							</td>
 							<td class="actions">
 								if row.Conn.Enabled && !v.NoKey {
-									<form method="post" action={ templ.URL("/connections/" + strconv.FormatInt(row.Conn.ID, 10) + "/sync") }>
+									<form method="post" action={ templ.URL("/settings/connections/" + strconv.FormatInt(row.Conn.ID, 10) + "/sync") }>
 										<button type="submit" disabled?={ row.Syncing }>Sync now</button>
 									</form>
 								}
@@ -77,7 +77,7 @@ templ connectionsTable(v connectionsView) {
 
 templ connectionFormPage(v connFormView) {
 	@layout(v.Label, v.Chrome) {
-		<p class="back"><a href="/connections">← Connections</a></p>
+		<p class="back"><a href="/settings/connections">← Connections</a></p>
 		if v.Conn == nil {
 			<h1>Add { v.Kind.Title() }</h1>
 		} else {
@@ -111,7 +111,7 @@ templ connectionFormPage(v connFormView) {
 				</dd>
 			</dl>
 			if v.Conn.Enabled {
-				<form method="post" action={ templ.URL("/connections/" + strconv.FormatInt(v.Conn.ID, 10) + "/sync") } class="inline">
+				<form method="post" action={ templ.URL("/settings/connections/" + strconv.FormatInt(v.Conn.ID, 10) + "/sync") } class="inline">
 					<input type="hidden" name="back" value="detail"/>
 					<button type="submit" class="primary" disabled?={ v.Syncing }>
 						if v.Syncing {
@@ -170,22 +170,22 @@ templ connectionFormPage(v connFormView) {
 					<tbody>
 						for _, r := range v.Runs {
 							<tr>
-								<td>{ ago(r.StartedAt) }</td>
-								<td>{ r.Trigger }</td>
-								<td>
+								<td data-label="Started">{ ago(r.StartedAt) }</td>
+								<td data-label="Trigger">{ r.Trigger }</td>
+								<td data-label="Result">
 									{ runSummary(r) }
 									if r.Error != "" {
 										<div class="sub error-text">{ r.Error }</div>
 									}
 								</td>
-								<td><code>{ shortSHA(r.Commit) }</code></td>
+								<td data-label="Commit"><code>{ shortSHA(r.Commit) }</code></td>
 							</tr>
 						}
 					</tbody>
 				</table>
 			}
 			if v.CanEdit {
-				<form method="post" class="danger" action={ templ.URL("/connections/" + strconv.FormatInt(v.Conn.ID, 10) + "/delete") }>
+				<form method="post" class="danger" action={ templ.URL("/settings/connections/" + strconv.FormatInt(v.Conn.ID, 10) + "/delete") }>
 					<label class="check"><input type="checkbox" name="confirm"/> Delete this connection. Documents it already stored stay in git.</label>
 					<button type="submit">Delete</button>
 				</form>
@@ -232,11 +232,11 @@ templ tokenSection(v tokensView, scope string, toks []state.APIToken, placeholde
 			<tbody>
 				for _, t := range toks {
 					<tr>
-						<td>{ t.Name }</td>
-						<td>{ ago(t.CreatedAt) }</td>
-						<td>{ ago(t.LastUsedAt) }</td>
+						<td data-label="Name">{ t.Name }</td>
+						<td data-label="Created">{ ago(t.CreatedAt) }</td>
+						<td data-label="Last used">{ ago(t.LastUsedAt) }</td>
 						<td class="actions">
-							<form method="post" action={ templ.URL("/tokens/" + strconv.FormatInt(t.ID, 10) + "/delete") }>
+							<form method="post" action={ templ.URL("/settings/tokens/" + strconv.FormatInt(t.ID, 10) + "/delete") }>
 								<button type="submit">Revoke</button>
 							</form>
 						</td>
@@ -245,7 +245,7 @@ templ tokenSection(v tokensView, scope string, toks []state.APIToken, placeholde
 			</tbody>
 		</table>
 	}
-	<form method="post" action="/tokens" class="settings">
+	<form method="post" action="/settings/tokens" class="settings">
 		<input type="hidden" name="scope" value={ scope }/>
 		<label for={ "name-" + scope }>New token</label>
 		<input id={ "name-" + scope } name="name" type="text" placeholder={ placeholder } required/>

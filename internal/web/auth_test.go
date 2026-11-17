@@ -202,8 +202,8 @@ func TestSignInFlow(t *testing.T) {
 
 	// Not signed in: pages send you to the identity provider and back.
 	b.client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	_, _, resp := b.do(t, "GET", "/connections", nil)
-	if loc := resp.Header.Get("Location"); loc != "/auth/login?next=%2Fconnections" {
+	_, _, resp := b.do(t, "GET", "/settings/connections", nil)
+	if loc := resp.Header.Get("Location"); loc != "/auth/login?next=%2Fsettings%2Fconnections" {
 		t.Fatalf("redirect = %q", loc)
 	}
 	if code, _, resp := b.do(t, "GET", "/", nil, "HX-Request", "true"); code != http.StatusNoContent || !strings.HasPrefix(resp.Header.Get("HX-Redirect"), "/auth/login") {
@@ -211,7 +211,7 @@ func TestSignInFlow(t *testing.T) {
 	}
 	b.client.CheckRedirect = nil
 
-	code, body := e.signIn(t, b, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi", "ktx-admins"}}, "/connections")
+	code, body := e.signIn(t, b, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi", "ktx-admins"}}, "/settings/connections")
 	if code != 200 || !strings.Contains(body, "<h1>Connections</h1>") || !strings.Contains(body, "antonio") || !strings.Contains(body, `class="badge">admin`) {
 		t.Fatalf("after sign-in: %d\n%s", code, body)
 	}
@@ -257,15 +257,15 @@ func TestConnectionsAndTokensPages(t *testing.T) {
 	e.signIn(t, member, idpUser{sub: "u2", username: "maxim"}, "/")
 
 	// The form for a new connection, then a rejected and an accepted credential.
-	_, body, _ := member.do(t, "GET", "/connections/new?kind=stub", nil)
+	_, body, _ := member.do(t, "GET", "/settings/connections/new?kind=stub", nil)
 	if !strings.Contains(body, `value="Maxim&#39;s Stub"`) || !strings.Contains(body, `type="password"`) {
 		t.Fatalf("new form:\n%s", body)
 	}
-	code, body, _ := member.do(t, "POST", "/connections", url.Values{"kind": {"stub"}, "label": {"Maxim's Stub"}, "field_api_key": {"bad"}, "field_region": {"eu"}})
+	code, body, _ := member.do(t, "POST", "/settings/connections", url.Values{"kind": {"stub"}, "label": {"Maxim's Stub"}, "field_api_key": {"bad"}, "field_region": {"eu"}})
 	if code != http.StatusUnprocessableEntity || !strings.Contains(body, "rejected the credential") || strings.Contains(body, `value="bad"`) || !strings.Contains(body, `value="eu"`) {
 		t.Fatalf("bad key: %d\n%s", code, body)
 	}
-	code, body, _ = member.do(t, "POST", "/connections", url.Values{"kind": {"stub"}, "label": {"Maxim's Stub"}, "field_api_key": {"stub_key_0123456789"}})
+	code, body, _ = member.do(t, "POST", "/settings/connections", url.Values{"kind": {"stub"}, "label": {"Maxim's Stub"}, "field_api_key": {"stub_key_0123456789"}})
 	if code != 200 || !strings.Contains(body, "Connection added") || !strings.Contains(body, "someone@stub.test") {
 		t.Fatalf("add: %d\n%s", code, body)
 	}
@@ -276,7 +276,7 @@ func TestConnectionsAndTokensPages(t *testing.T) {
 	id := fmt.Sprint(conns[0].ID)
 
 	// The stored key never comes back; only its last characters.
-	_, body, _ = member.do(t, "GET", "/connections/"+id, nil)
+	_, body, _ = member.do(t, "GET", "/settings/connections/"+id, nil)
 	if strings.Contains(body, "stub_key_0123456789") || !strings.Contains(body, "stored (…6789)") {
 		t.Errorf("detail leaks or lacks the hint:\n%s", body)
 	}
@@ -284,24 +284,24 @@ func TestConnectionsAndTokensPages(t *testing.T) {
 	// Someone else's connection: visible, but only the owner or an admin may change it.
 	other := e.browser()
 	e.signIn(t, other, idpUser{sub: "u3", username: "guest"}, "/")
-	if code, _, _ := other.do(t, "POST", "/connections/"+id, url.Values{"label": {"mine now"}}); code != http.StatusForbidden {
+	if code, _, _ := other.do(t, "POST", "/settings/connections/"+id, url.Values{"label": {"mine now"}}); code != http.StatusForbidden {
 		t.Errorf("non-owner edit: %d", code)
 	}
-	if code, _, _ := admin.do(t, "POST", "/connections/"+id, url.Values{"label": {"Renamed by admin"}, "enabled": {"on"}}); code != 200 {
+	if code, _, _ := admin.do(t, "POST", "/settings/connections/"+id, url.Values{"label": {"Renamed by admin"}, "enabled": {"on"}}); code != 200 {
 		t.Errorf("admin edit: %d", code)
 	}
 	if c, _ := e.db.Connection(conns[0].ID); c.Label != "Renamed by admin" {
 		t.Errorf("label = %q", c.Label)
 	}
-	if code, body, _ := member.do(t, "POST", "/connections/"+id+"/delete", url.Values{}); code != http.StatusUnprocessableEntity || !strings.Contains(body, "Tick the box") {
+	if code, body, _ := member.do(t, "POST", "/settings/connections/"+id+"/delete", url.Values{}); code != http.StatusUnprocessableEntity || !strings.Contains(body, "Tick the box") {
 		t.Errorf("delete without confirm: %d", code)
 	}
-	if code, body, _ := member.do(t, "POST", "/connections/"+id+"/delete", url.Values{"confirm": {"on"}}); code != 200 || !strings.Contains(body, "Connection deleted") {
+	if code, body, _ := member.do(t, "POST", "/settings/connections/"+id+"/delete", url.Values{"confirm": {"on"}}); code != 200 || !strings.Contains(body, "Connection deleted") {
 		t.Errorf("delete: %d", code)
 	}
 
 	// API tokens: shown once, then only listed; revoking removes them.
-	code, body, _ = member.do(t, "POST", "/tokens", url.Values{"name": {"import script"}})
+	code, body, _ = member.do(t, "POST", "/settings/tokens", url.Values{"name": {"import script"}})
 	tok := regexp.MustCompile(`<pre id="new-token-api">(ktx_[^<]+)</pre>`).FindStringSubmatch(body)
 	if code != 200 || tok == nil {
 		t.Fatalf("create token: %d\n%s", code, body)
@@ -309,12 +309,12 @@ func TestConnectionsAndTokensPages(t *testing.T) {
 	if u, err := e.db.APITokenUser(tok[1]); err != nil || u.Username != "maxim" {
 		t.Errorf("token owner: %+v %v", u, err)
 	}
-	_, body, _ = member.do(t, "GET", "/tokens", nil)
+	_, body, _ = member.do(t, "GET", "/settings/tokens", nil)
 	if strings.Contains(body, tok[1]) || !strings.Contains(body, "import script") {
 		t.Errorf("token list leaks the token or misses it")
 	}
 	list, _ := e.db.APITokens(1 + 1) // maxim is user 2
-	member.do(t, "POST", fmt.Sprintf("/tokens/%d/delete", list[0].ID), url.Values{})
+	member.do(t, "POST", fmt.Sprintf("/settings/tokens/%d/delete", list[0].ID), url.Values{})
 	if _, err := e.db.APITokenUser(tok[1]); err == nil {
 		t.Error("revoked token still works")
 	}

@@ -136,7 +136,7 @@ func (u *UI) createCalendar(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	err := u.cal.CreateCalendar(r.Context(), calendar.Calendar{Owner: calendarOwner(user), ID: id, Name: name}, actor(r))
 	if err == nil {
-		http.Redirect(w, r, "/calendar", http.StatusSeeOther)
+		http.Redirect(w, r, "/settings/calendar", http.StatusSeeOther)
 		return
 	}
 	v, verr := u.calendarView(r)

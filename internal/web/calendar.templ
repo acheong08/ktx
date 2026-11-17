@@ -49,21 +49,21 @@ templ calendarPage(v calendarView) {
 			<tbody>
 				for _, c := range v.Calendars {
 					<tr>
-						<td>{ c.Cal.Title() }</td>
-						<td>
+						<td data-label="Calendar">{ c.Cal.Title() }</td>
+						<td data-label="Owner">
 							{ c.Cal.Owner }
 							if !c.Mine {
 								<span class="muted">(read-only for you)</span>
 							}
 						</td>
-						<td>{ strconv.Itoa(c.Events) }</td>
-						<td><code>{ davPath(v.Owner, c.Cal.Owner, c.Cal.ID) }</code></td>
+						<td data-label="Events">{ strconv.Itoa(c.Events) }</td>
+						<td data-label="CalDAV path"><code>{ davPath(v.Owner, c.Cal.Owner, c.Cal.ID) }</code></td>
 					</tr>
 				}
 			</tbody>
 		</table>
 		<div class="columns">
-			<form method="post" action="/calendar/import" enctype="multipart/form-data" class="settings">
+			<form method="post" action="/settings/calendar/import" enctype="multipart/form-data" class="settings">
 				<h3>Import an .ics file</h3>
 				<p class="muted">An export from Google Calendar, Apple Calendar or Outlook. Events are added or updated by UID; nothing is deleted, so importing again is safe.</p>
 				<label for="import-cal">Into</label>
@@ -76,7 +76,7 @@ templ calendarPage(v calendarView) {
 				<input id="import-file" type="file" name="file" accept=".ics,text/calendar" required/>
 				<button type="submit" class="primary">Import</button>
 			</form>
-			<form method="post" action="/calendar" class="settings">
+			<form method="post" action="/settings/calendar" class="settings">
 				<h3>New calendar</h3>
 				<label for="cal-id">Id</label>
 				<input id="cal-id" name="id" type="text" value={ v.NewID } placeholder="e.g. work" pattern="[a-z0-9][a-z0-9_\-]*" required/>
@@ -87,7 +87,7 @@ templ calendarPage(v calendarView) {
 		</div>
 		<h2>Connect a calendar app</h2>
 		<p>
-			Create a <a href="/tokens#calendar">calendar token</a>, then sign in with your ktx username
+			Create a <a href="/settings/tokens#calendar">calendar token</a>, then sign in with your ktx username
 			(<code>{ v.Owner }</code>) and the token as the password. Works while you're on the tailnet.
 		</p>
 		<ul>
@@ -115,12 +115,12 @@ templ calendarPage(v calendarView) {
 				<tbody>
 					for _, e := range v.Events {
 						<tr>
-							<td>{ e.Day }</td>
-							<td>{ e.Time }</td>
-							<td>{ e.Occ.Summary }</td>
-							<td>{ guestList(e.Guests) }</td>
-							<td>{ e.Occ.Calendar }</td>
-							<td>
+							<td data-label="Day">{ e.Day }</td>
+							<td data-label="Time">{ e.Time }</td>
+							<td data-label="Event">{ e.Occ.Summary }</td>
+							<td data-label="Guests">{ guestList(e.Guests) }</td>
+							<td data-label="Calendar">{ e.Occ.Calendar }</td>
+							<td data-label="Transcript">
 								for _, t := range e.Transcripts {
 									<a href={ templ.URL("/transcripts/" + t.ID) }>{ t.Label() }</a>
 								}
