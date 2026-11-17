@@ -297,3 +297,42 @@ func TestDelete(t *testing.T) {
 		t.Errorf("sync after re-upload: %+v", res)
 	}
 }
+
+func TestEditedTranscriptSurvivesSync(t *testing.T) {
+	s, remote := newStore(t)
+	ctx := context.Background()
+	doc, _ := transcript.Parse([]byte(a))
+	res, _, err := s.PutBatch(ctx, []Item{{Doc: doc, Sync: true}}, "antonio", "Sync pocket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := doc.ID
+
+	// A no-op edit doesn't mark it.
+	if r, _ := s.Edit(ctx, id, "maxim", func(*transcript.Doc) error { return nil }); r.Result != ResultUnchanged {
+		t.Fatalf("no-op: %+v", r)
+	}
+	if _, err := s.Edit(ctx, id, "maxim", func(d *transcript.Doc) error { d.Body = "Fixed by hand.\n"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := s.Get(id)
+	if e.EditedBy != "maxim" || e.EditedAt == "" {
+		t.Fatalf("not marked: %+v", e)
+	}
+
+	// The source changes: the sync leaves the edited file alone.
+	changed, _ := transcript.Parse([]byte(strings.Replace(a, "tenant isolation", "something new", 1)))
+	got, _, err := s.PutBatch(ctx, []Item{{Doc: changed, Sync: true}}, "antonio", "Sync pocket")
+	if err != nil || got[0].Result != ResultSkipped || got[0].Path != res[0].Path {
+		t.Fatalf("sync after edit: %+v %v", got, err)
+	}
+	if file := gitOut(t, "--git-dir", remote, "show", "main:"+res[0].Path); !strings.Contains(file, "Fixed by hand.") {
+		t.Errorf("edit lost:\n%s", file)
+	}
+
+	// An upload by a person still replaces it.
+	changed, _ = transcript.Parse([]byte(strings.Replace(a, "tenant isolation", "something new", 1)))
+	if r, err := s.Put(ctx, changed, "antonio"); err != nil || r.Result != ResultUpdated {
+		t.Errorf("manual upload: %+v %v", r, err)
+	}
+}

@@ -222,6 +222,12 @@ templ detailPage(v detailView) {
 					if v.Entry.IngestedAt != "" {
 						· first ingested { v.Entry.IngestedAt }
 					}
+					if v.Entry.EditedAt != "" {
+						· edited by { v.Entry.EditedBy } { v.Entry.EditedAt }
+						if v.Entry.Meta.Source != "" && v.Entry.Meta.Source != "manual" {
+							(no longer updated from { v.Entry.Meta.Source })
+						}
+					}
 				</dd>
 			</dl>
 			<div class="body">
@@ -266,7 +272,7 @@ templ transcriptForm(v formView) {
 		}
 		<h1>{ formTitle(v) }</h1>
 		if v.Source != "" && v.Source != "manual" {
-			<p class="flash warn">Synced from { v.Source }. If the original changes there, the next sync replaces your edits here (git keeps both versions).</p>
+			<p class="flash warn">Synced from { v.Source }. Once you save an edit here, syncs from { v.Source } stop updating this transcript; changes made there afterwards won't come through.</p>
 		}
 		if len(v.Problems) > 0 {
 			<div class="flash error" role="alert">

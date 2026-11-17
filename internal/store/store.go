@@ -62,10 +62,11 @@ type Entry struct {
 	Folder string // the type folder: first directory under transcripts/
 	Meta   transcript.Meta
 	Start  time.Time // zero if the date can't be read
-	// IngestedAt and UploadedBy are the server-managed keys, as stored.
-	IngestedAt, UploadedBy string
-	Problems               []string // why the file doesn't meet the upload rules, if it doesn't
-	Body                   string
+	// IngestedAt, UploadedBy, EditedAt and EditedBy are the server-managed
+	// keys, as stored. EditedAt is set once someone edits it in ktx.
+	IngestedAt, UploadedBy, EditedAt, EditedBy string
+	Problems                                   []string // why the file doesn't meet the upload rules, if it doesn't
+	Body                                       string
 
 	search string // lowercased text for Matches
 }
@@ -123,16 +124,17 @@ const (
 	ResultCreated   = "created"
 	ResultUpdated   = "updated"
 	ResultUnchanged = "unchanged"
-	// ResultSkipped: a connector sync of a transcript someone deleted.
+	// ResultSkipped: a connector sync of a transcript someone deleted or
+	// edited in ktx.
 	ResultSkipped = "skipped"
 )
 
 // Item is one document to store.
 type Item struct {
 	Doc *transcript.Doc
-	// Sync marks a document from a connector. Synced documents whose id was
-	// deleted are skipped (ResultSkipped), so deleting a transcript sticks;
-	// an upload by a person brings it back.
+	// Sync marks a document from a connector. Synced documents that were
+	// deleted, or edited in ktx (edited_at set), are skipped (ResultSkipped),
+	// so deletions and edits stick; an upload by a person still replaces them.
 	Sync bool
 	// DefaultType files a new document whose metadata has no type. It is
 	// ignored for documents already stored, so ones sorted by hand stay put.
@@ -251,6 +253,11 @@ func (s *Store) putOne(root string, it Item, user string) (PutResult, []string, 
 		if old, err = os.ReadFile(filepath.Join(root, filepath.FromSlash(existing))); err != nil {
 			return out, nil, err
 		}
+		if it.Sync && transcript.ReadField(old, "edited_at") != "" {
+			// Edited by a person in ktx: the edit wins over the source.
+			out.Path, out.Result = existing, ResultSkipped
+			return out, nil, nil
+		}
 		if v := transcript.ReadField(old, "ingested_at"); v != "" {
 			ingestedAt = v // first ingestion time; git history has the rest
 		}
@@ -368,6 +375,8 @@ func (s *Store) SetType(ctx context.Context, id, typ, user string) (PutResult, e
 
 // Edit changes a stored transcript with apply and writes it back in one
 // commit, moving or renaming the file if its type, date or title changed.
+// It sets edited_at and edited_by, after which connector syncs no longer
+// replace the transcript.
 // It keeps the transcript's id and every metadata key apply doesn't touch.
 // A result that breaks the upload rules is refused with a
 // *transcript.ValidationError and nothing is written.
@@ -422,6 +431,12 @@ func (s *Store) Edit(ctx context.Context, id, user string, apply func(doc *trans
 			return gitrepo.Change{}, nil
 		}
 		out.Result = ResultUpdated
+		// Marks the transcript as edited, so connector syncs leave it alone.
+		doc.Set("edited_at", s.now().UTC().Format(time.RFC3339))
+		doc.Set("edited_by", user)
+		if content, err = doc.Render(); err != nil {
+			return gitrepo.Change{}, err
+		}
 		ch := gitrepo.Change{Paths: []string{rel},
 			Message: commitMessage("Edit transcript", fresh.Label(), fresh.Start, id, "Changed-By: "+user)}
 		if err := writeFile(root, rel, content); err != nil {
@@ -568,6 +583,8 @@ func readEntry(root, rel string) (Entry, error) {
 		e.Meta, e.Start, e.Body, e.Problems = doc.Meta, doc.Start, doc.Body, problems
 		e.IngestedAt = transcript.ReadField(raw, "ingested_at")
 		e.UploadedBy = transcript.ReadField(raw, "uploaded_by")
+		e.EditedAt = transcript.ReadField(raw, "edited_at")
+		e.EditedBy = transcript.ReadField(raw, "edited_by")
 	}
 	if e.ID == "" {
 		e.Problems = append(e.Problems, "file name has no -<id>.md suffix, so it can't be updated or moved from here")

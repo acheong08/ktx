@@ -171,7 +171,7 @@ func TestEditAndNewTranscript(t *testing.T) {
 
 	// The edit form is filled in from the file.
 	_, body, _ := e.do(t, "GET", "/transcripts/"+id+"/edit", nil)
-	for _, want := range []string{`value="Acme intro"`, `value="2026-11-14T10:00"`, `value="America/Los_Angeles"`, "Jane Doe &lt;jane@acme.com&gt; | Acme | CTO", "Old notes.", "Synced from granola"} {
+	for _, want := range []string{`value="Acme intro"`, `value="2026-11-14T10:00"`, `value="America/Los_Angeles"`, "Jane Doe &lt;jane@acme.com&gt; | Acme | CTO", "Old notes.", "syncs from granola stop updating"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("edit form lacks %q", want)
 		}
@@ -188,7 +188,7 @@ func TestEditAndNewTranscript(t *testing.T) {
 		t.Fatalf("redirect = %q", loc)
 	}
 	path := gitShowPath(t, e.remote, "transcripts/customer_discovery/2026-11-14-1130-acme-discovery-"+id+".md")
-	for _, want := range []string{"title: Acme discovery", `date: "2026-11-14T11:30:00Z"`, "timezone: Europe/London", "duration_minutes: 45", "type: customer_discovery", "name: Bob", "- pricing", "granola_url: https://notes.granola.ai/d/x", "source_id: a", "New notes.\nSecond line.\n"} {
+	for _, want := range []string{"title: Acme discovery", `date: "2026-11-14T11:30:00Z"`, "timezone: Europe/London", "duration_minutes: 45", "type: customer_discovery", "name: Bob", "- pricing", "granola_url: https://notes.granola.ai/d/x", "source_id: a", "edited_by: web UI (100.64.0.3)", "edited_at: ", "New notes.\nSecond line.\n"} {
 		if !strings.Contains(path, want) {
 			t.Errorf("edited file lacks %q:\n%s", want, path)
 		}
