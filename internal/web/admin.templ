@@ -301,3 +301,24 @@ templ tokenSection(v tokensView, scope string, toks []state.APIToken, placeholde
 		<button type="submit" class="primary">Create token</button>
 	</form>
 }
+
+templ generalPage(v generalView) {
+	@layout("General", v.Chrome) {
+		<h1>General</h1>
+		@flashBox(v.Flash)
+		<form method="post" action="/settings/general" class="settings">
+			<label for="timezone">Time zone</label>
+			<input id="timezone" name="timezone" type="text" value={ v.Zone } list="zones" autocomplete="off" spellcheck="false" required/>
+			<datalist id="zones">
+				for _, z := range v.Zones {
+					<option value={ z }></option>
+				}
+			</datalist>
+			<p class="help">
+				For the whole workspace: times in ktx are shown in it, calendar times without a zone are read in it,
+				and agents' dates without an offset mean it. Now: { v.Now }.
+			</p>
+			<button type="submit" class="primary">Save</button>
+		</form>
+	}
+}

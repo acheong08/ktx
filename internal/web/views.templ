@@ -43,6 +43,9 @@ templ layout(title string, c chrome) {
 			<main>
 				if c.InSettings() {
 					<nav class="tabs settings-tabs" aria-label="Settings">
+						if c.General {
+							<a href="/settings/general" class={ "tab", templ.KV("active", c.Nav == "general") }>General</a>
+						}
 						if c.Connections {
 							<a href="/settings/connections" class={ "tab", templ.KV("active", c.Nav == "connections") }>Connections</a>
 						}
@@ -215,6 +218,9 @@ templ detailPage(v detailView) {
 				<dt>When</dt>
 				<dd>
 					{ fmtDate(v.Entry) }
+					if own := ownTime(v.Entry); own != "" {
+						<span class="muted">({ own })</span>
+					}
 					if v.Entry.Meta.DurationMinutes > 0 {
 						· { strconv.Itoa(v.Entry.Meta.DurationMinutes) } min
 					}

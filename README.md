@@ -116,6 +116,10 @@ No auth. Returns `{"ok":true}`.
 
 **Bulk sorting:** on the list, filter (e.g. search a participant's name or email), tick the rows (the header box ticks all shown), enter a type and Apply. All the moves are one commit.
 
+### Time zone
+
+Settings → General has the workspace's time zone (America/Los_Angeles until set; anyone signed in can change it; stored in `state.db`). Every time in the UI is shown in it: transcripts, including Granola's, which arrive in UTC, plus notes, calendar events and "last used" dates. A transcript that recorded its own zone also shows its local time, e.g. "(09:00 Asia/Tokyo)". The zone also applies to calendar times without a zone, to MCP dates without an offset, and to new note file names. Changing it re-matches transcripts to calendar events.
+
 ### Sign-in
 
 With `BRAIN_OIDC_ISSUER` set, every page needs sign-in through the identity provider. On the server that's [Pocket ID](https://pocket-id.org) at `id.internal.melzi.dev` (passkeys, OIDC).
@@ -183,7 +187,7 @@ One workspace-wide [Neuralwatt](https://neuralwatt.com) key (`https://api.neural
 | `list_calendars` | Every calendar, with owner; `yours` marks the caller's. |
 | `list_events` | Occurrences in a range (default: today + 7 days, at most a year), optionally by calendar or words; organizer, guests, location, description (cut at 2000 bytes), and the transcripts recorded in each. |
 
-Every tool requires an `intent`: one sentence on why the call is made. It is written to the log (`journalctl -u brain-server | grep 'mcp call'`) with the user, app and tool, and not stored anywhere else. Dates without an offset are in America/Los_Angeles.
+Every tool requires an `intent`: one sentence on why the call is made. It is written to the log (`journalctl -u brain-server | grep 'mcp call'`) with the user, app and tool, and not stored anywhere else. Dates without an offset are in the workspace's time zone (Settings → General).
 
 **Connecting an app:** add the URL as a remote MCP server. The app discovers the rest and opens a browser:
 1. `/mcp` answers 401 with `WWW-Authenticate: Bearer resource_metadata=…/.well-known/oauth-protected-resource/mcp` (RFC 9728), naming ktx as the authorization server (`/.well-known/oauth-authorization-server`, RFC 8414).

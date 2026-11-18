@@ -119,3 +119,19 @@ func splitLabels(s string) []string {
 	}
 	return strings.Split(s, ",")
 }
+
+const timeZoneKey = "timezone"
+
+// TimeZone returns the workspace's time zone name, or "" if none is set.
+func (s *DB) TimeZone() (string, error) {
+	st, err := s.Setting(timeZoneKey)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	}
+	return st.Value, err
+}
+
+// SetTimeZone stores the workspace's time zone name (checked by the caller).
+func (s *DB) SetTimeZone(name, user string) error {
+	return s.PutSetting(Setting{Key: timeZoneKey, Value: name, UpdatedBy: user})
+}

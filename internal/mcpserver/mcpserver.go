@@ -131,7 +131,7 @@ func (s *Server) instructions(u state.User) string {
 		"Notes (search_notes, get_note) are free-form things people wrote down, separate from transcripts. " +
 		"Notes can have labels; list_note_labels says what each means (some may mark notes as unreviewed or unreliable). " +
 		"Use list_events to see meetings in a time range and which transcripts belong to them. " +
-		"Dates without an offset are in " + calendar.DefaultZone.String() + ".")
+		"Dates without an offset are in " + calendar.DefaultZone().String() + ".")
 	return b.String()
 }
 

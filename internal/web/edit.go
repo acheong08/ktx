@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"github.com/acheong08/ktx/internal/calendar"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -57,8 +58,8 @@ func (u *UI) editTranscript(w http.ResponseWriter, r *http.Request) {
 	f := formView{ID: e.ID, Source: e.Meta.Source, Title: e.Meta.Title, Timezone: e.Meta.Timezone, Type: typeValue(e), Body: e.Body}
 	if !e.Start.IsZero() {
 		start := e.LocalStart()
-		if f.Timezone == "" { // no zone recorded: edit in UTC rather than guess
-			f.Timezone, start = "UTC", e.Start.UTC()
+		if f.Timezone == "" { // no zone recorded: edit in the workspace's
+			f.Timezone, start = calendar.DefaultZone().String(), e.Start.In(calendar.DefaultZone())
 		}
 		f.Date = start.Format("2006-01-02T15:04")
 	}

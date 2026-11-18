@@ -93,12 +93,12 @@ func (u *UI) calendarView(r *http.Request) (calendarView, error) {
 		}
 	}
 	for _, o := range occs {
-		local := o.Start.In(calendar.DefaultZone)
+		local := o.Start.In(calendar.DefaultZone())
 		row := occRow{Occ: o, Day: local.Format("Mon 2 Jan"), Guests: o.Guests()}
 		if o.AllDay {
 			row.Time = "all day"
 		} else {
-			row.Time = local.Format("15:04") + "–" + o.End.In(calendar.DefaultZone).Format("15:04")
+			row.Time = local.Format("15:04") + "–" + o.End.In(calendar.DefaultZone()).Format("15:04")
 		}
 		rid := ""
 		if o.Recurring() {
@@ -273,7 +273,7 @@ func (u *UI) eventChoices(e store.Entry) []eventChoice {
 		if o.AllDay {
 			continue
 		}
-		label := o.Start.In(calendar.DefaultZone).Format("Mon 2 Jan 15:04") + " · " + o.Summary + " (" + o.Calendar + ")"
+		label := o.Start.In(calendar.DefaultZone()).Format("Mon 2 Jan 15:04") + " · " + o.Summary + " (" + o.Calendar + ")"
 		rid := ""
 		if o.Recurring() {
 			rid = o.RecurrenceID.Format(time.RFC3339)
@@ -359,5 +359,5 @@ func eventWhen(l *transcript.EventLink) string {
 	if err != nil {
 		return l.Start
 	}
-	return t.In(calendar.DefaultZone).Format("Mon 2 Jan 2006, 15:04 MST")
+	return t.In(calendar.DefaultZone()).Format("Mon 2 Jan 2006, 15:04 MST")
 }

@@ -142,6 +142,8 @@ func (u *UI) Handler() http.Handler {
 	}
 
 	if u.auth != nil && u.db != nil {
+		mux.HandleFunc("GET /settings/general", u.page(u.generalPage))
+		mux.HandleFunc("POST /settings/general", u.page(u.saveGeneral))
 		mux.HandleFunc("GET /settings/tokens", u.page(u.tokens))
 		mux.HandleFunc("POST /settings/tokens", u.page(u.createToken))
 		mux.HandleFunc("POST /settings/tokens/{id}/delete", u.page(u.deleteToken))
@@ -184,6 +186,8 @@ func (u *UI) Handler() http.Handler {
 	mux.HandleFunc("GET /settings", u.page(func(w http.ResponseWriter, r *http.Request) {
 		c := u.chrome(r, "")
 		switch {
+		case c.General:
+			http.Redirect(w, r, "/settings/general", http.StatusSeeOther)
 		case c.Connections:
 			http.Redirect(w, r, "/settings/connections", http.StatusSeeOther)
 		case c.Calendar:
@@ -260,6 +264,7 @@ type chrome struct {
 	User        string
 	IsAdmin     bool
 	SignIn      bool
+	General     bool
 	Connections bool
 	Tokens      bool
 	Calendar    bool
@@ -276,7 +281,7 @@ func (c chrome) HasSettings() bool {
 
 // InSettings reports whether the page is one of the settings pages.
 func (c chrome) InSettings() bool {
-	return c.Nav == "connections" || c.Nav == "calendar" || c.Nav == "tokens" || c.Nav == "labels" || c.Nav == "ai"
+	return c.Nav == "general" || c.Nav == "connections" || c.Nav == "calendar" || c.Nav == "tokens" || c.Nav == "labels" || c.Nav == "ai"
 }
 
 func (u *UI) chrome(r *http.Request, nav string) chrome {
@@ -285,6 +290,7 @@ func (u *UI) chrome(r *http.Request, nav string) chrome {
 		c.User, c.IsAdmin = user.Display(), user.IsAdmin
 		c.Connections = u.conns != nil
 		c.Tokens = u.db != nil
+		c.General = u.db != nil && u.auth != nil
 		c.Calendar = u.cal != nil
 		c.AI = u.ai != nil
 		c.Labels = u.notes != nil
@@ -673,7 +679,7 @@ func fmtDate(e store.Entry) string {
 	if e.Start.IsZero() {
 		return "—"
 	}
-	return e.LocalStart().Format("Mon 2 Jan 2006, 15:04 MST")
+	return e.Start.In(calendar.DefaultZone()).Format("Mon 2 Jan 2006, 15:04 MST")
 }
 
 func participantSummary(e store.Entry) string {
@@ -733,4 +739,17 @@ func guestList(gs []calendar.Attendee) string {
 		}
 	}
 	return strings.Join(out, ", ")
+}
+
+// ownTime is the call's start in its own time zone, when it recorded one
+// that differs from the workspace's ("" otherwise).
+func ownTime(e store.Entry) string {
+	if e.Start.IsZero() || e.Meta.Timezone == "" {
+		return ""
+	}
+	loc, err := time.LoadLocation(e.Meta.Timezone)
+	if err != nil || loc.String() == calendar.DefaultZone().String() {
+		return ""
+	}
+	return e.Start.In(loc).Format("15:04") + " " + loc.String()
 }

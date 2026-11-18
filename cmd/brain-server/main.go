@@ -95,6 +95,19 @@ func run(log *slog.Logger) error {
 	}
 	defer db.Close()
 
+	// The workspace's time zone (Settings → General), before anything reads
+	// calendars or shows times.
+	if name, err := db.TimeZone(); err != nil {
+		return err
+	} else if name != "" {
+		if loc, err := time.LoadLocation(name); err == nil {
+			calendar.SetDefaultZone(loc)
+		} else {
+			log.Warn("stored time zone is unknown; using the default", "zone", name, "err", err)
+		}
+	}
+	log.Info("time zone", "zone", calendar.DefaultZone().String())
+
 	// Credentials for connectors are sealed with the master key. Without one,
 	// connections can't be created or run, but everything else works.
 	var box *secrets.Box

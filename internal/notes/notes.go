@@ -178,7 +178,7 @@ func (s *Service) save(ctx context.Context, p state.PendingNote) error {
 		return err
 	}
 	title, suggested, how := s.describe(ctx, p.Body, defs)
-	n := Note{ID: p.ID, Title: title, Created: p.CreatedAt.In(calendar.DefaultZone), Author: p.Author, Body: p.Body,
+	n := Note{ID: p.ID, Title: title, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body,
 		Labels: ordered(append(slices.Clone(p.Labels), suggested...), defs)}
 	gctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -329,7 +329,7 @@ func (s *Service) Edit(ctx context.Context, id, title, body string, labels []str
 			return gitrepo.Change{}, nil
 		}
 		n.Title, n.Body, n.Labels = title, body, labels
-		n.EditedAt, n.EditedBy = s.now().In(calendar.DefaultZone).Format(time.RFC3339), user
+		n.EditedAt, n.EditedBy = s.now().In(calendar.DefaultZone()).Format(time.RFC3339), user
 		n.Path = path.Join(Root, fileName(n))
 		ch := gitrepo.Change{Paths: []string{n.Path}, Message: commitMessage("Edit note", n.Title, n.ID, user)}
 		if rel != n.Path {
@@ -372,7 +372,7 @@ func (s *Service) missing(id string) error {
 }
 
 func pendingNote(p state.PendingNote) Note {
-	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone), Author: p.Author, Body: p.Body, Labels: p.Labels, Pending: true, Error: p.Error}
+	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body, Labels: p.Labels, Pending: true, Error: p.Error}
 	n.search = strings.ToLower(n.Author + "\n" + strings.Join(n.Labels, " ") + "\n" + n.Body)
 	return n
 }

@@ -245,7 +245,7 @@ func fmtNoteDate(t time.Time) string {
 	if t.IsZero() {
 		return "—"
 	}
-	return t.In(calendar.DefaultZone).Format("Mon 2 Jan 2006, 15:04")
+	return t.In(calendar.DefaultZone()).Format("Mon 2 Jan 2006, 15:04")
 }
 
 // --- Settings → AI -----------------------------------------------------------

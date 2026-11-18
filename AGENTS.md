@@ -17,7 +17,7 @@ notes/labels.yaml                                     note labels: name + descri
 
 Ways in:
 - **API:** `POST /v1/transcripts` (Bearer API token). There is no other upload endpoint; meetings are transcripts of a type.
-- **Web UI** (htmx 4 + templ), sign-in through Pocket ID (OIDC). Pages: Transcripts (list, search, bulk type edit, detail, edit, new, delete), Notes, and Settings → Connections / Calendar / Tokens / Labels / AI.
+- **Web UI** (htmx 4 + templ), sign-in through Pocket ID (OIDC). Pages: Transcripts (list, search, bulk type edit, detail, edit, new, delete), Notes, and Settings → General / Connections / Calendar / Tokens / Labels / AI.
 - **Connectors** (inside the service, per-user credentials): Granola (REST API, Business key) and Pocket. Each has a "Type for …" setting for where *new* documents go; documents already stored stay where they are.
 - **Notes** (web UI scratchpad): saved to `pending_notes` in SQLite, then a worker titles them and adds fitting labels (Neuralwatt via fantasy, workspace key set by admins in Settings → AI; one call returns `Title:`/`Labels:` lines; fallback first line, author's labels only) and commits. Edits/deletes are synchronous. Labels in use can't be deleted.
 - **CalDAV** at `/dav/` (Apple Calendar, Thunderbird), Basic auth with a calendar-scoped token.
@@ -28,6 +28,7 @@ Key behaviours:
 - Every write is one commit (fetch + rebase → write → commit → push, 3 retries; unpushed commits retried by a 5-minute sync). Connector runs and bulk moves are one commit each; the bookmark is saved only after the commit.
 - A transcript edited in the UI gets `edited_at`/`edited_by`; connector syncs then skip it.
 - **Calendar linking:** every transcript write, every calendar change, and server start re-match transcripts to events and write `calendar_event:` plus `participants` entries with `from: calendar`. Order: Granola `calendar_event_id`; else events within 15 min of the start or that the call started during; ranked by has-guests, then participant overlap (email among guests or full name in title), then nearest start, then title similarity; a full tie is no match. `match: manual|none` is set by people and never recomputed. Calendar participants are hidden from the edit form and re-added on save.
+- **Time zone:** one workspace zone (Settings → General, `settings` key `timezone`, default America/Los_Angeles) via `calendar.DefaultZone()`/`SetDefaultZone` (atomic; clears the event parse cache). All UI times use it; transcripts with their own zone also show it.
 - Everyone sees every calendar; only the owner writes (others get read-only over CalDAV as `<owner>~<id>`). The first CalDAV sign-in or Settings → Calendar visit creates `<user>/personal`.
 
 ## Code map

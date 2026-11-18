@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -83,8 +84,23 @@ var (
 	parseCache = map[string][]event{} // by ETag (content hash)
 )
 
-// DefaultZone is used for "floating" times, which carry no time zone.
-var DefaultZone = mustLoad("America/Los_Angeles")
+var defaultZone atomic.Pointer[time.Location]
+
+func init() { defaultZone.Store(mustLoad("America/Los_Angeles")) }
+
+// DefaultZone is the workspace's time zone (Settings → General): times are
+// shown in it, and "floating" calendar times, which carry no zone, are read
+// in it. America/Los_Angeles until set.
+func DefaultZone() *time.Location { return defaultZone.Load() }
+
+// SetDefaultZone changes the workspace's time zone. Parsed events are
+// forgotten, since floating times depend on it.
+func SetDefaultZone(loc *time.Location) {
+	defaultZone.Store(loc)
+	parseMu.Lock()
+	parseCache = map[string][]event{}
+	parseMu.Unlock()
+}
 
 func mustLoad(name string) *time.Location {
 	l, err := time.LoadLocation(name)
@@ -240,7 +256,7 @@ func propTimes(p *ical.Prop) []time.Time {
 }
 
 func parseValue(v, tzid string, date bool) (time.Time, bool, error) {
-	loc := DefaultZone
+	loc := DefaultZone()
 	if tzid != "" {
 		loc = Zone(tzid)
 	}
@@ -258,7 +274,7 @@ func parseValue(v, tzid string, date bool) (time.Time, bool, error) {
 
 // Zone resolves an iCalendar TZID: IANA names, Windows names (Outlook), and
 // prefixed names such as "/mozilla.org/20050126_1/America/New_York".
-// Unknown zones fall back to DefaultZone.
+// Unknown zones fall back to DefaultZone().
 func Zone(tzid string) *time.Location {
 	tzid = strings.Trim(tzid, `" `)
 	if l, err := time.LoadLocation(tzid); err == nil && tzid != "" && tzid != "Local" {
@@ -273,7 +289,7 @@ func Zone(tzid string) *time.Location {
 			return l
 		}
 	}
-	return DefaultZone
+	return DefaultZone()
 }
 
 // windowsZones maps the Windows zone names Outlook writes to IANA names.

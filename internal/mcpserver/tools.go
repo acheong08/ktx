@@ -110,7 +110,7 @@ func (s *Server) addTools(srv *mcp.Server, c caller) {
 // --- times -----------------------------------------------------------------
 
 // parseWhen reads a date (YYYY-MM-DD), a local time (YYYY-MM-DDTHH:MM) or
-// an RFC 3339 time. Dates and local times are in calendar.DefaultZone.
+// an RFC 3339 time. Dates and local times are in calendar.DefaultZone().
 // With endOfDay, a date means the end of that day.
 func parseWhen(v string, endOfDay bool) (time.Time, error) {
 	v = strings.TrimSpace(v)
@@ -118,11 +118,11 @@ func parseWhen(v string, endOfDay bool) (time.Time, error) {
 		return t, nil
 	}
 	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
-		if t, err := time.ParseInLocation(layout, v, calendar.DefaultZone); err == nil {
+		if t, err := time.ParseInLocation(layout, v, calendar.DefaultZone()); err == nil {
 			return t, nil
 		}
 	}
-	if t, err := time.ParseInLocation("2006-01-02", v, calendar.DefaultZone); err == nil {
+	if t, err := time.ParseInLocation("2006-01-02", v, calendar.DefaultZone()); err == nil {
 		if endOfDay {
 			t = t.AddDate(0, 0, 1)
 		}
@@ -161,7 +161,7 @@ type eventRef struct {
 type transcriptSummary struct {
 	ID              string        `json:"id"`
 	Title           string        `json:"title"`
-	Start           string        `json:"start,omitempty" jsonschema:"when the call started (RFC 3339, in the call's time zone)"`
+	Start           string        `json:"start,omitempty" jsonschema:"when the call started (RFC 3339, in the call's time zone, else the workspace's)"`
 	DurationMinutes int           `json:"duration_minutes,omitempty"`
 	Type            string        `json:"type"`
 	Participants    []participant `json:"participants,omitempty"`
@@ -174,7 +174,7 @@ type transcriptSummary struct {
 
 func summarize(e store.Entry) transcriptSummary {
 	t := transcriptSummary{
-		ID: e.ID, Title: e.Label(), Start: formatTime(e.LocalStart()), DurationMinutes: e.Meta.DurationMinutes,
+		ID: e.ID, Title: e.Label(), Start: formatTime(startOf(e)), DurationMinutes: e.Meta.DurationMinutes,
 		Type: e.Folder, Tags: e.Meta.Tags, Source: e.Meta.Source, TextBytes: len(e.Body),
 	}
 	for _, p := range e.Meta.Participants {
@@ -465,8 +465,8 @@ func (s *Server) listEvents(_ context.Context, in listEventsIn) (listEventsOut, 
 			return listEventsOut{}, fmt.Errorf("from: %w", err)
 		}
 	} else {
-		now := time.Now().In(calendar.DefaultZone)
-		from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, calendar.DefaultZone)
+		now := time.Now().In(calendar.DefaultZone())
+		from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, calendar.DefaultZone())
 	}
 	if in.To != "" {
 		if to, err = parseWhen(in.To, true); err != nil {
@@ -731,4 +731,13 @@ func (s *Server) listNoteLabels(_ context.Context, _ listLabelsIn) (listLabelsOu
 		out.Labels = append(out.Labels, labelInfo{Name: d.Name, Meaning: d.Description, Notes: d.Count})
 	}
 	return out, nil
+}
+
+// startOf is a transcript's start in its own time zone, or the
+// workspace's when it has none.
+func startOf(e store.Entry) time.Time {
+	if e.Meta.Timezone == "" {
+		return e.Start.In(calendar.DefaultZone())
+	}
+	return e.LocalStart()
 }

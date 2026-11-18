@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"github.com/acheong08/ktx/internal/calendar"
 	"net/http"
 	"strconv"
 	"strings"
@@ -372,7 +373,7 @@ func ago(t time.Time) string {
 	case d < 48*time.Hour:
 		return strconv.Itoa(int(d.Hours())) + " h ago"
 	default:
-		return t.Local().Format("2 Jan 2006")
+		return t.In(calendar.DefaultZone()).Format("2 Jan 2006")
 	}
 }
 
