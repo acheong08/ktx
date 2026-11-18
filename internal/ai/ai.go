@@ -1,6 +1,6 @@
 // Package ai holds the workspace's language model settings (Neuralwatt,
 // through fantasy's OpenAI-compatible provider) and the jobs that use it.
-// Today that is one job: giving notes a title.
+// Today that is one job: giving notes a title and labels.
 package ai
 
 import (
@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -163,8 +164,85 @@ const titlePrompt = `You name notes. Reply with only a short, specific title for
 // to name it.
 const maxInput = 8000
 
+// LabelDef is a label the model may apply, with what it means.
+type LabelDef struct {
+	Name, Description string
+}
+
+const describePrompt = `You name notes and label them. Reply in exactly two lines:
+Title: <a short, specific title: at most 8 words, in the note's language, no quotes, no trailing full stop>
+Labels: <comma-separated names of the labels below whose meaning clearly applies to the note, or none>
+
+Only use these labels:
+`
+
+// Describe asks the model for a note's title and the labels (from defs)
+// that apply. Labels the model invents are dropped.
+func Describe(ctx context.Context, cfg Config, text string, defs []LabelDef) (string, []string, error) {
+	if len(defs) == 0 {
+		t, err := Title(ctx, cfg, text)
+		return t, nil, err
+	}
+	var b strings.Builder
+	b.WriteString(describePrompt)
+	for _, d := range defs {
+		b.WriteString("- " + d.Name + ": " + strings.Join(strings.Fields(d.Description), " ") + "\n")
+	}
+	reply, err := generate(ctx, cfg, b.String(), text, 120)
+	if err != nil {
+		return "", nil, err
+	}
+	title, labels := parseDescription(reply, defs)
+	if title == "" {
+		return "", nil, errors.New("the model returned no title")
+	}
+	return title, labels, nil
+}
+
+// parseDescription reads "Title: …" and "Labels: …" lines. Without a
+// Title line, the first line is the title.
+func parseDescription(reply string, defs []LabelDef) (string, []string) {
+	known := map[string]bool{}
+	for _, d := range defs {
+		known[d.Name] = true
+	}
+	var title string
+	var labels []string
+	for _, line := range strings.Split(reply, "\n") {
+		l := strings.TrimLeft(strings.TrimSpace(line), "*#> ")
+		lower := strings.ToLower(l)
+		switch {
+		case strings.HasPrefix(lower, "title:"):
+			title = CleanTitle(l)
+		case strings.HasPrefix(lower, "labels:"):
+			for _, n := range strings.Split(l[len("labels:"):], ",") {
+				n = strings.ToLower(strings.Trim(strings.TrimSpace(n), "\"'`*_ ."))
+				if known[n] && !slices.Contains(labels, n) {
+					labels = append(labels, n)
+				}
+			}
+		}
+	}
+	if title == "" {
+		title = CleanTitle(reply)
+	}
+	return title, labels
+}
+
 // Title asks the model for a note's title.
 func Title(ctx context.Context, cfg Config, text string) (string, error) {
+	reply, err := generate(ctx, cfg, titlePrompt, text, 60)
+	if err != nil {
+		return "", err
+	}
+	t := CleanTitle(reply)
+	if t == "" {
+		return "", errors.New("the model returned no title")
+	}
+	return t, nil
+}
+
+func generate(ctx context.Context, cfg Config, system, text string, maxTokens int64) (string, error) {
 	provider, err := openaicompat.New(
 		openaicompat.WithBaseURL(cfg.BaseURL),
 		openaicompat.WithAPIKey(cfg.APIKey),
@@ -182,8 +260,8 @@ func Title(ctx context.Context, cfg Config, text string) (string, error) {
 		text = strings.ToValidUTF8(text[:maxInput], "")
 	}
 	agent := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(titlePrompt),
-		fantasy.WithMaxOutputTokens(60),
+		fantasy.WithSystemPrompt(system),
+		fantasy.WithMaxOutputTokens(maxTokens),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxRetries(1),
 		// A title needs no thinking; it's much faster without.
@@ -195,11 +273,7 @@ func Title(ctx context.Context, cfg Config, text string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	t := CleanTitle(res.Response.Content.Text())
-	if t == "" {
-		return "", errors.New("the model returned no title")
-	}
-	return t, nil
+	return res.Response.Content.Text(), nil
 }
 
 // CleanTitle makes a model's reply into a title: its first line, without

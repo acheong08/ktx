@@ -204,3 +204,18 @@ form.scratchpad textarea { width: 100%; min-height: 9rem; resize: vertical; font
 .pending { color: var(--muted); font-style: italic; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .note-actions { display: flex; justify-content: flex-end; margin: 0 0 1rem; }
+.label { display: inline-block; white-space: nowrap; font-size: 12px; line-height: 1.6; padding: 0 .45rem; margin: 0 .25rem 0 0; border-radius: 999px; background: var(--soft); color: var(--fg); border: 1px solid var(--line); }
+a.label:hover { text-decoration: none; border-color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .3rem; }
+.chips .label { margin: 0; }
+fieldset.labels { border: 0; padding: 0; margin: 0; display: grid; gap: .3rem; }
+fieldset.labels legend { font-weight: 600; margin-bottom: .2rem; padding: 0; }
+fieldset.labels .help { margin-left: .25rem; }
+.list td > .label { justify-self: start; }
+form.meaning { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem; align-items: start; }
+form.meaning textarea, #label-description { font-family: inherit; font-size: 14px; resize: vertical; }
+@media (max-width: 640px) {
+  form.meaning { grid-template-columns: minmax(0, 1fr); justify-items: start; }
+  form.meaning textarea, #label-description { font-size: 16px; }
+}
+form.meaning textarea { width: 100%; justify-self: stretch; }

@@ -150,6 +150,8 @@ var migrations = []string{
 		attempts   INTEGER NOT NULL DEFAULT 0,
 		error      TEXT NOT NULL DEFAULT ''
 	);`,
+	// Labels the author picked for a queued note, comma-separated.
+	`ALTER TABLE pending_notes ADD COLUMN labels TEXT NOT NULL DEFAULT '';`,
 }
 
 func (s *DB) migrate() error {

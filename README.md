@@ -141,13 +141,26 @@ Free-form notes, separate from transcripts, stored as `notes/<YYYY-MM-DD>-<HHMM>
 title: Acme pricing follow-up
 created: "2026-11-17T16:32:00-08:00"
 author: antonio
+labels: [customer-feedback]
 ---
 Talked to Jane at Acme. They want usage-based pricing and SSO before signing.
 ```
 
 - **Scratchpad** (top of **Notes**): write, then Save (or Ctrl/⌘ + Enter). The note is saved right away to a queue in `state.db` and listed as "Generating title…". In the background ktx asks the model for a title, then commits (`Add note: <title>`, `Note-Id:`, `Changed-By:`) and pushes. The page fills in the title when it's ready. Queued notes survive a restart; a failed commit is retried every minute.
+- **Labels:** tick any of the defined labels under the scratchpad (or on the edit form). The model adds labels whose meaning fits the note (never removes yours); untick one on the edit form to take it off. The list has a tab per label, and labels are searchable.
 - **Titles** come from the model in Settings → AI. Without a key, or if the model fails twice, the title is the note's first line. They're never regenerated: edit the title by hand.
 - **List, search, read, edit, delete** like transcripts. Everyone sees every note. Edits and deletes are committed straight away; a note can't be changed until its first commit is done.
+
+### Settings → Labels
+
+Anyone signed in can add labels, change what they mean, or delete them. Definitions live in `notes/labels.yaml` (name and meaning, one commit per change):
+
+```yaml
+- name: slop
+  description: Pasted AI output, not reviewed; don't trust it as fact
+```
+
+Names are lowercase letters, digits, `-` and `_`. The meaning matters: people see it next to the checkbox, the model labels new notes by it, and agents read it with `list_note_labels`. A label that notes still have can't be deleted; take it off them first.
 
 ### Settings → AI
 
@@ -164,7 +177,8 @@ One workspace-wide [Neuralwatt](https://neuralwatt.com) key (`https://api.neural
 | `search_transcripts` | Newest first; filters: words (as in the UI search), type, participant (name, email or company), from/to dates. Returns metadata, the linked event, and a snippet around the match. |
 | `get_transcript` | Metadata and text by id; long texts in pages (`offset`, `max_bytes`, `next_offset`). |
 | `list_transcript_types` | Types with counts. |
-| `search_notes` | Notes newest first; filters: words, author, from/to dates. Notes still being saved are included (`pending`, no title yet). |
+| `list_note_labels` | The note labels, what each means, and how many notes have it. |
+| `search_notes` | Notes newest first, with their labels; filters: words, author, label, without_label, from/to dates. Notes still being saved are included (`pending`, no title yet). |
 | `get_note` | A note's title, author, dates and text. |
 | `list_calendars` | Every calendar, with owner; `yours` marks the caller's. |
 | `list_events` | Occurrences in a range (default: today + 7 days, at most a year), optionally by calendar or words; organizer, guests, location, description (cut at 2000 bytes), and the transcripts recorded in each. |

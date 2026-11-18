@@ -52,6 +52,9 @@ templ layout(title string, c chrome) {
 						if c.Tokens {
 							<a href="/settings/tokens" class={ "tab", templ.KV("active", c.Nav == "tokens") }>Tokens</a>
 						}
+						if c.Labels {
+							<a href="/settings/labels" class={ "tab", templ.KV("active", c.Nav == "labels") }>Labels</a>
+						}
 						if c.AI {
 							<a href="/settings/ai" class={ "tab", templ.KV("active", c.Nav == "ai") }>AI</a>
 						}

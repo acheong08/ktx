@@ -2,18 +2,25 @@ package web
 
 import "github.com/acheong08/ktx/internal/notes"
 
+import "slices"
+
+import "strconv"
+
 templ notesListPage(v notesView) {
 	@layout("Notes", v.Chrome) {
 		<h1>Notes</h1>
 		<form method="post" action="/notes" class="scratchpad">
 			<label for="note-body" class="visually-hidden">New note</label>
 			<textarea id="note-body" name="body" rows="8" placeholder="Write anything… (Markdown)" required autofocus data-ctrl-enter-submits>{ v.Draft }</textarea>
+			@labelPicker(v.Labels, v.Picked)
 			<div class="scratchpad-actions">
 				<button type="submit" class="primary">Save note</button>
 				<span class="help">
 					Ctrl/⌘ + Enter saves.
 					if v.AIOff {
 						The title is the first line (no AI key set).
+					} else if len(v.Labels) > 0 {
+						A title is written for you, and labels that fit are added.
 					} else {
 						A title is written for you.
 					}
@@ -31,10 +38,21 @@ templ notesListPage(v notesView) {
 
 templ noteResults(v notesView) {
 	@flashBox(v.Flash)
+	if len(v.Tabs) > 1 {
+		<nav class="tabs" aria-label="Labels">
+			for _, t := range v.Tabs {
+				<a href={ templ.URL(t.URL) } hx-get={ t.URL } hx-target="#note-results" hx-push-url="true" class={ "tab", templ.KV("active", t.Active) }>
+					{ t.Label } <span class="count">{ strconv.Itoa(t.Count) }</span>
+				</a>
+			}
+		</nav>
+	}
 	if len(v.Notes) == 0 {
 		<p class="empty">
 			if v.Q != "" {
 				No note matches “{ v.Q }”.
+			} else if v.Label != "" {
+				No notes labelled { v.Label }.
 			} else {
 				No notes yet.
 			}
@@ -48,9 +66,16 @@ templ noteResults(v notesView) {
 				for _, n := range v.Notes {
 					<tr>
 						<td data-label="Note">
-							<a href={ templ.URL("/notes/" + n.ID) }>
-								@noteTitle(n, false)
-							</a>
+							<div>
+								<a href={ templ.URL("/notes/" + n.ID) }>
+									@noteTitle(n, false)
+								</a>
+								if len(n.Labels) > 0 {
+									<div class="chips">
+										@labelChips(v.Labels, n.Labels)
+									</div>
+								}
+							</div>
 						</td>
 						<td data-label="Written" class="date">{ fmtNoteDate(n.Created) }</td>
 						<td data-label="By">{ n.Author }</td>
@@ -77,6 +102,11 @@ templ noteDetailPage(v noteView) {
 			<h1>
 				@noteTitle(v.Note, true)
 			</h1>
+			if len(v.Note.Labels) > 0 {
+				<p>
+					@labelChips(v.Labels, v.Note.Labels)
+				</p>
+			}
 			@flashBox(v.Flash)
 			<p class="sub">
 				{ fmtNoteDate(v.Note.Created) } · { v.Note.Author }
@@ -115,6 +145,7 @@ templ noteForm(v noteFormView) {
 			<input id="title" name="title" type="text" value={ v.Title } required/>
 			<label for="body">Note (Markdown)</label>
 			<textarea id="body" name="body" rows="20" required data-ctrl-enter-submits>{ v.Body }</textarea>
+			@labelPicker(v.Labels, v.Picked)
 			<button type="submit" class="primary">Save</button>
 		</form>
 	}
@@ -157,5 +188,78 @@ templ aiSettingsPage(v aiView) {
 				</form>
 			}
 		}
+	}
+}
+
+// labelChips shows a note's labels, linking to the notes with each.
+templ labelChips(defs []notes.Label, labels []string) {
+	for _, l := range labels {
+		<a class="label" href={ templ.URL(notesURL("", l)) } title={ labelMeaning(defs, l) }>{ l }</a>
+	}
+}
+
+// labelPicker is a checkbox per label, with its meaning.
+templ labelPicker(defs []notes.Label, picked []string) {
+	if len(defs) > 0 {
+		<fieldset class="labels">
+			<legend>Labels</legend>
+			for _, d := range defs {
+				<label class="check" title={ d.Description }>
+					<input type="checkbox" name="labels" value={ d.Name } checked?={ slices.Contains(picked, d.Name) }/>
+					<span class="label">{ d.Name }</span>
+					<span class="help">{ d.Description }</span>
+				</label>
+			}
+		</fieldset>
+	} else {
+		<p class="help"><a href="/settings/labels">Define labels</a> to sort notes (e.g. one for pasted AI output).</p>
+	}
+}
+
+templ labelsSettingsPage(v labelsView) {
+	@layout("Labels", v.Chrome) {
+		<h1>Labels</h1>
+		<p class="lead">
+			Labels for notes, and what each means. People tick them when writing a note; the AI adds the ones whose meaning fits;
+			agents see the list over MCP. Stored in <code>notes/labels.yaml</code>.
+		</p>
+		@flashBox(v.Flash)
+		if len(v.Labels) > 0 {
+			<table class="list">
+				<thead>
+					<tr><th>Label</th><th>Meaning</th><th>Notes</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, l := range v.Labels {
+						<tr>
+							<td data-label="Label"><a class="label" href={ templ.URL(notesURL("", l.Name)) }>{ l.Name }</a></td>
+							<td data-label="Meaning">
+								<form method="post" action="/settings/labels" class="meaning">
+									<input type="hidden" name="name" value={ l.Name }/>
+									<textarea name="description" rows="3" aria-label={ "Meaning of " + l.Name } required>{ l.Description }</textarea>
+									<button type="submit">Save</button>
+								</form>
+							</td>
+							<td data-label="Notes">{ strconv.Itoa(l.Count) }</td>
+							<td class="actions">
+								if l.Count == 0 {
+									<form method="post" action={ templ.URL("/settings/labels/" + l.Name + "/delete") }>
+										<button type="submit">Delete</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<form method="post" action="/settings/labels" class="settings">
+			<label for="label-name">New label</label>
+			<input id="label-name" name="name" type="text" value={ v.Name } placeholder="e.g. slop" pattern="[a-z0-9][a-z0-9_\-]{0,29}" autocomplete="off" required/>
+			<p class="help">Lowercase letters, digits, - and _.</p>
+			<label for="label-description">What it means</label>
+			<textarea id="label-description" name="description" rows="2" placeholder="e.g. Pasted AI output, not reviewed; don't trust it as fact" required>{ v.Description }</textarea>
+			<button type="submit" class="primary">Add label</button>
+		</form>
 	}
 }

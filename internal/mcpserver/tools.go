@@ -29,6 +29,7 @@ func (i listCalendarsIn) intentText() string { return i.Intent }
 func (i listEventsIn) intentText() string    { return i.Intent }
 func (i searchNotesIn) intentText() string   { return i.Intent }
 func (i getNoteIn) intentText() string       { return i.Intent }
+func (i listLabelsIn) intentText() string    { return i.Intent }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -71,10 +72,16 @@ func (s *Server) addTools(srv *mcp.Server, c caller) {
 	}, s.listTypes)
 	if s.notes != nil {
 		addTool(srv, s, c, &mcp.Tool{
+			Name:  "list_note_labels",
+			Title: "List note labels",
+			Description: "The labels notes can have, what each means, and how many notes have it. " +
+				"Check it before trusting a note: a label's meaning may say how reliable its notes are.",
+		}, s.listNoteLabels)
+		addTool(srv, s, c, &mcp.Tool{
 			Name:  "search_notes",
 			Title: "Search notes",
 			Description: "Find notes people wrote in ktx (separate from transcripts), newest first. All filters are optional. " +
-				"Returns titles, authors and, with a query, a snippet; read one with get_note.",
+				"Returns titles, authors, labels and, with a query, a snippet; read one with get_note. See list_note_labels for what labels mean.",
 		}, s.searchNotes)
 		addTool(srv, s, c, &mcp.Tool{
 			Name:        "get_note",
@@ -592,27 +599,30 @@ func linkKey(uid, rid string) string {
 // --- notes -----------------------------------------------------------------
 
 type noteSummary struct {
-	ID        string `json:"id"`
-	Title     string `json:"title" jsonschema:"empty while the note is still being saved"`
-	Created   string `json:"created"`
-	Author    string `json:"author"`
-	Pending   bool   `json:"pending,omitempty" jsonschema:"just written: its title is being generated and it isn't in git yet"`
-	TextBytes int    `json:"text_bytes"`
-	Snippet   string `json:"snippet,omitempty"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title" jsonschema:"empty while the note is still being saved"`
+	Created   string   `json:"created"`
+	Author    string   `json:"author"`
+	Labels    []string `json:"labels,omitempty" jsonschema:"see list_note_labels for what each means"`
+	Pending   bool     `json:"pending,omitempty" jsonschema:"just written: its title and suggested labels are being generated and it isn't in git yet"`
+	TextBytes int      `json:"text_bytes"`
+	Snippet   string   `json:"snippet,omitempty"`
 }
 
 func summarizeNote(n notes.Note) noteSummary {
-	return noteSummary{ID: n.ID, Title: n.Title, Created: formatTime(n.Created), Author: n.Author, Pending: n.Pending, TextBytes: len(n.Body)}
+	return noteSummary{ID: n.ID, Title: n.Title, Created: formatTime(n.Created), Author: n.Author, Labels: n.Labels, Pending: n.Pending, TextBytes: len(n.Body)}
 }
 
 type searchNotesIn struct {
-	Intent string `json:"intent" jsonschema:"One sentence: what the user asked for and why this call helps. Logged for the people whose data this is."`
-	Query  string `json:"query,omitempty" jsonschema:"words that must all appear (case-insensitive) in the title, author or text"`
-	Author string `json:"author,omitempty" jsonschema:"only notes by this person (ktx username)"`
-	From   string `json:"from,omitempty" jsonschema:"only notes written on or after this date (YYYY-MM-DD) or time (RFC 3339)"`
-	To     string `json:"to,omitempty" jsonschema:"only notes written up to and including this date, or before this time"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"how many to return (default 20, at most 100)"`
-	Offset int    `json:"offset,omitempty" jsonschema:"skip this many, for the next page"`
+	Intent  string `json:"intent" jsonschema:"One sentence: what the user asked for and why this call helps. Logged for the people whose data this is."`
+	Query   string `json:"query,omitempty" jsonschema:"words that must all appear (case-insensitive) in the title, author or text"`
+	Author  string `json:"author,omitempty" jsonschema:"only notes by this person (ktx username)"`
+	Label   string `json:"label,omitempty" jsonschema:"only notes with this label (see list_note_labels)"`
+	NoLabel string `json:"without_label,omitempty" jsonschema:"leave out notes with this label, e.g. to skip unreviewed ones"`
+	From    string `json:"from,omitempty" jsonschema:"only notes written on or after this date (YYYY-MM-DD) or time (RFC 3339)"`
+	To      string `json:"to,omitempty" jsonschema:"only notes written up to and including this date, or before this time"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"how many to return (default 20, at most 100)"`
+	Offset  int    `json:"offset,omitempty" jsonschema:"skip this many, for the next page"`
 }
 
 type searchNotesOut struct {
@@ -648,6 +658,8 @@ func (s *Server) searchNotes(_ context.Context, in searchNotesIn) (searchNotesOu
 	for _, n := range all {
 		switch {
 		case in.Author != "" && !strings.EqualFold(n.Author, strings.TrimSpace(in.Author)),
+			in.Label != "" && !slices.Contains(n.Labels, strings.ToLower(strings.TrimSpace(in.Label))),
+			in.NoLabel != "" && slices.Contains(n.Labels, strings.ToLower(strings.TrimSpace(in.NoLabel))),
 			!from.IsZero() && n.Created.Before(from),
 			!to.IsZero() && !n.Created.Before(to),
 			!n.Matches(in.Query):
@@ -693,4 +705,30 @@ func (s *Server) getNote(_ context.Context, in getNoteIn) (getNoteOut, error) {
 		return getNoteOut{}, err
 	}
 	return getNoteOut{noteSummary: summarizeNote(n), Path: n.Path, EditedBy: n.EditedBy, EditedAt: n.EditedAt, Text: n.Body}, nil
+}
+
+type listLabelsIn struct {
+	Intent string `json:"intent" jsonschema:"One sentence: what the user asked for and why this call helps. Logged for the people whose data this is."`
+}
+
+type labelInfo struct {
+	Name    string `json:"name"`
+	Meaning string `json:"meaning"`
+	Notes   int    `json:"notes" jsonschema:"how many notes have it"`
+}
+
+type listLabelsOut struct {
+	Labels []labelInfo `json:"labels"`
+}
+
+func (s *Server) listNoteLabels(_ context.Context, _ listLabelsIn) (listLabelsOut, error) {
+	defs, err := s.notes.LabelsInUse()
+	if err != nil {
+		return listLabelsOut{}, err
+	}
+	out := listLabelsOut{Labels: []labelInfo{}}
+	for _, d := range defs {
+		out.Labels = append(out.Labels, labelInfo{Name: d.Name, Meaning: d.Description, Notes: d.Count})
+	}
+	return out, nil
 }

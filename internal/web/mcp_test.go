@@ -192,7 +192,7 @@ func TestMCPOverOAuth(t *testing.T) {
 			t.Errorf("%s has no intent argument: %s", tl.Name, mustJSON(tl.InputSchema))
 		}
 	}
-	if strings.Join(names, ",") != "get_note,get_transcript,list_calendars,list_events,list_transcript_types,search_notes,search_transcripts" {
+	if strings.Join(names, ",") != "get_note,get_transcript,list_calendars,list_events,list_note_labels,list_transcript_types,search_notes,search_transcripts" {
 		t.Fatalf("tools: %v", names)
 	}
 
@@ -273,8 +273,11 @@ func TestMCPOverOAuth(t *testing.T) {
 		t.Fatalf("unknown calendar: %q", msg)
 	}
 
-	// Notes (no AI key here, so the title is the first line).
-	nid, err := e.notes.Submit("Runway is 14 months\nHire in Q1.", "antonio")
+	// Notes (no AI key here, so the title is the first line) and labels.
+	if _, err := e.notes.PutLabel(ctx, "slop", "Pasted AI output, not reviewed", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	nid, err := e.notes.Submit("Runway is 14 months\nHire in Q1.", "antonio", []string{"slop"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +291,17 @@ func TestMCPOverOAuth(t *testing.T) {
 	if msg != "" || out["total"] != 1.0 || out["notes"].([]any)[0].(map[string]any)["title"] != "Runway is 14 months" {
 		t.Fatalf("search_notes: %v %s", out, msg)
 	}
+	out, _ = call("list_note_labels", map[string]any{"intent": "test"})
+	if l := out["labels"].([]any); len(l) != 1 || l[0].(map[string]any)["meaning"] != "Pasted AI output, not reviewed" || l[0].(map[string]any)["notes"] != 1.0 {
+		t.Fatalf("labels: %v", out)
+	}
+	if out, _ = call("search_notes", map[string]any{"intent": "test", "without_label": "slop"}); out["total"] != 0.0 {
+		t.Fatalf("without_label: %v", out)
+	}
 	out, _ = call("get_note", map[string]any{"intent": "test", "id": nid})
+	if l := out["labels"].([]any); len(l) != 1 || l[0] != "slop" {
+		t.Fatalf("note labels: %v", out)
+	}
 	if out["text"] != "Runway is 14 months\nHire in Q1.\n" || out["author"] != "antonio" {
 		t.Fatalf("get_note: %v", out)
 	}

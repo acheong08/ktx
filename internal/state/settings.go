@@ -3,6 +3,7 @@ package state
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,7 @@ type PendingNote struct {
 	ID        string
 	Author    string
 	Body      string
+	Labels    []string // picked by the author
 	CreatedAt time.Time
 	Attempts  int
 	Error     string // the last failure, if any
@@ -59,14 +61,14 @@ type PendingNote struct {
 
 // AddPendingNote queues a note.
 func (s *DB) AddPendingNote(n PendingNote) error {
-	_, err := s.db.Exec(`INSERT INTO pending_notes (id, author, body, created_at) VALUES (?, ?, ?, ?)`,
-		n.ID, n.Author, n.Body, n.CreatedAt.UTC().Format(time.RFC3339))
+	_, err := s.db.Exec(`INSERT INTO pending_notes (id, author, body, labels, created_at) VALUES (?, ?, ?, ?, ?)`,
+		n.ID, n.Author, n.Body, strings.Join(n.Labels, ","), n.CreatedAt.UTC().Format(time.RFC3339))
 	return err
 }
 
 // PendingNotes lists queued notes, oldest first.
 func (s *DB) PendingNotes() ([]PendingNote, error) {
-	rows, err := s.db.Query(`SELECT id, author, body, created_at, attempts, error FROM pending_notes ORDER BY created_at, id`)
+	rows, err := s.db.Query(`SELECT id, author, body, labels, created_at, attempts, error FROM pending_notes ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -75,10 +77,11 @@ func (s *DB) PendingNotes() ([]PendingNote, error) {
 	for rows.Next() {
 		var n PendingNote
 		var created sql.NullString
-		if err := rows.Scan(&n.ID, &n.Author, &n.Body, &created, &n.Attempts, &n.Error); err != nil {
+		var labels string
+		if err := rows.Scan(&n.ID, &n.Author, &n.Body, &labels, &created, &n.Attempts, &n.Error); err != nil {
 			return nil, err
 		}
-		n.CreatedAt = parseTime(created)
+		n.CreatedAt, n.Labels = parseTime(created), splitLabels(labels)
 		out = append(out, n)
 	}
 	return out, rows.Err()
@@ -88,12 +91,13 @@ func (s *DB) PendingNotes() ([]PendingNote, error) {
 func (s *DB) PendingNote(id string) (PendingNote, error) {
 	var n PendingNote
 	var created sql.NullString
-	err := s.db.QueryRow(`SELECT id, author, body, created_at, attempts, error FROM pending_notes WHERE id = ?`, id).
-		Scan(&n.ID, &n.Author, &n.Body, &created, &n.Attempts, &n.Error)
+	var labels string
+	err := s.db.QueryRow(`SELECT id, author, body, labels, created_at, attempts, error FROM pending_notes WHERE id = ?`, id).
+		Scan(&n.ID, &n.Author, &n.Body, &labels, &created, &n.Attempts, &n.Error)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PendingNote{}, ErrNotFound
 	}
-	n.CreatedAt = parseTime(created)
+	n.CreatedAt, n.Labels = parseTime(created), splitLabels(labels)
 	return n, err
 }
 
@@ -107,4 +111,11 @@ func (s *DB) FailPendingNote(id, msg string) error {
 func (s *DB) DeletePendingNote(id string) error {
 	_, err := s.db.Exec(`DELETE FROM pending_notes WHERE id = ?`, id)
 	return err
+}
+
+func splitLabels(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
 }

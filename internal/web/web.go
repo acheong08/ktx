@@ -155,6 +155,11 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("POST /notes/{id}", u.page(u.saveNote))
 		mux.HandleFunc("POST /notes/{id}/delete", u.page(u.deleteNote))
 	}
+	if u.auth != nil && u.notes != nil {
+		mux.HandleFunc("GET /settings/labels", u.page(u.labelsPage))
+		mux.HandleFunc("POST /settings/labels", u.page(u.putLabel))
+		mux.HandleFunc("POST /settings/labels/{name}/delete", u.page(u.deleteLabel))
+	}
 	if u.auth != nil && u.ai != nil {
 		mux.HandleFunc("GET /settings/ai", u.page(u.aiPage))
 		mux.HandleFunc("POST /settings/ai", u.page(u.saveAI))
@@ -185,6 +190,8 @@ func (u *UI) Handler() http.Handler {
 			http.Redirect(w, r, "/settings/calendar", http.StatusSeeOther)
 		case c.Tokens:
 			http.Redirect(w, r, "/settings/tokens", http.StatusSeeOther)
+		case c.Labels:
+			http.Redirect(w, r, "/settings/labels", http.StatusSeeOther)
 		case c.AI:
 			http.Redirect(w, r, "/settings/ai", http.StatusSeeOther)
 		default:
@@ -258,15 +265,18 @@ type chrome struct {
 	Calendar    bool
 	AI          bool
 	Notes       bool
+	Labels      bool
 	Nav         string // active section
 }
 
 // HasSettings reports whether any settings page is available.
-func (c chrome) HasSettings() bool { return c.Connections || c.Calendar || c.Tokens || c.AI }
+func (c chrome) HasSettings() bool {
+	return c.Connections || c.Calendar || c.Tokens || c.Labels || c.AI
+}
 
 // InSettings reports whether the page is one of the settings pages.
 func (c chrome) InSettings() bool {
-	return c.Nav == "connections" || c.Nav == "calendar" || c.Nav == "tokens" || c.Nav == "ai"
+	return c.Nav == "connections" || c.Nav == "calendar" || c.Nav == "tokens" || c.Nav == "labels" || c.Nav == "ai"
 }
 
 func (u *UI) chrome(r *http.Request, nav string) chrome {
@@ -277,6 +287,7 @@ func (u *UI) chrome(r *http.Request, nav string) chrome {
 		c.Tokens = u.db != nil
 		c.Calendar = u.cal != nil
 		c.AI = u.ai != nil
+		c.Labels = u.notes != nil
 	}
 	return c
 }

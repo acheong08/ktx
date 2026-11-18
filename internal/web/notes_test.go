@@ -83,3 +83,65 @@ func TestNotesUI(t *testing.T) {
 		t.Fatalf("after delete: %d", code)
 	}
 }
+
+func TestNoteLabelsUI(t *testing.T) {
+	e := setupAuth(t)
+	b := e.browser()
+	e.signIn(t, b, idpUser{sub: "u2", username: "maxim", groups: []string{"melzi"}}, "/")
+
+	// No labels yet: the scratchpad points to Settings.
+	if _, body, _ := b.do(t, "GET", "/notes", nil); !strings.Contains(body, `href="/settings/labels">Define labels</a>`) {
+		t.Fatalf("no labels hint missing")
+	}
+	// Anyone signed in can define labels.
+	code, body, _ := b.do(t, "POST", "/settings/labels", url.Values{"name": {"slop"}, "description": {"Pasted AI output, not reviewed"}})
+	if code != 200 || !strings.Contains(body, "Saved “slop”") {
+		t.Fatalf("add label: %d %s", code, body)
+	}
+	if code, _, _ := b.do(t, "POST", "/settings/labels", url.Values{"name": {"Bad Name"}, "description": {"x"}}); code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad name: %d", code)
+	}
+
+	// Tick it on the scratchpad.
+	_, body, _ = b.do(t, "GET", "/notes", nil)
+	if !strings.Contains(body, `name="labels" value="slop"`) || !strings.Contains(body, "Pasted AI output, not reviewed") {
+		t.Fatalf("picker: %s", body)
+	}
+	_, body, _ = b.do(t, "POST", "/notes", url.Values{"body": {"Some pasted output"}, "labels": {"slop"}})
+	id := regexp.MustCompile(`href="/notes/([0-9a-f]{12})"`).FindStringSubmatch(body)[1]
+	for i := 0; i < 200; i++ {
+		if n, _ := e.notes.Get(id); !n.Pending {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_, body, _ = b.do(t, "GET", "/notes", nil)
+	if !strings.Contains(body, `<a class="label" href="/notes?label=slop" title="Pasted AI output, not reviewed">slop</a>`) {
+		t.Fatalf("chip: %s", body)
+	}
+	// Filter tabs.
+	b.do(t, "POST", "/notes", url.Values{"body": {"Unlabelled note"}})
+	time.Sleep(300 * time.Millisecond)
+	_, body, _ = b.do(t, "GET", "/notes?label=slop", nil)
+	if !strings.Contains(body, "Some pasted output") && !strings.Contains(body, "/notes/"+id) || strings.Contains(body, "Unlabelled note") {
+		t.Fatalf("filter: %s", body)
+	}
+
+	// In use: no Delete button, and deleting is refused.
+	_, body, _ = b.do(t, "GET", "/settings/labels", nil)
+	if strings.Contains(body, "/settings/labels/slop/delete") {
+		t.Fatal("delete offered for a label in use")
+	}
+	if code, body, _ := b.do(t, "POST", "/settings/labels/slop/delete", url.Values{}); code != http.StatusConflict || !strings.Contains(body, "take it off them first") {
+		t.Fatalf("delete in use: %d", code)
+	}
+	// Untick it on the edit form, then delete.
+	_, body, _ = b.do(t, "GET", "/notes/"+id+"/edit", nil)
+	if !strings.Contains(body, `value="slop" checked`) {
+		t.Fatalf("edit form: %s", body)
+	}
+	b.do(t, "POST", "/notes/"+id, url.Values{"title": {"Pasted"}, "body": {"Some pasted output"}})
+	if code, body, _ := b.do(t, "POST", "/settings/labels/slop/delete", url.Values{}); code != 200 || !strings.Contains(body, "Deleted “slop”") {
+		t.Fatalf("delete: %d %s", code, body)
+	}
+}

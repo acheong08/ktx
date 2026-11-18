@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"slices"
 	"time"
 
 	"github.com/acheong08/ktx/internal/ai"
@@ -17,22 +19,43 @@ import (
 type notesView struct {
 	Chrome chrome
 	Q      string
+	Label  string // filter: only notes with this label
 	Notes  []notes.Note
-	Draft  string // the scratchpad, kept when saving failed
+	Labels []notes.Label // defined labels, with counts
+	Tabs   []tab
+	Draft  string   // the scratchpad, kept when saving failed
+	Picked []string // labels ticked on the scratchpad
 	Flash  flash
 	AIOff  bool // titles come from the first line
 }
 
-func (u *UI) notesView(r *http.Request, q string) (notesView, error) {
+func (u *UI) notesView(r *http.Request, q, label string) (notesView, error) {
 	all, err := u.notes.List()
 	if err != nil {
 		return notesView{}, err
 	}
-	v := notesView{Chrome: u.chrome(r, "notes"), Q: q}
+	defs, err := u.notes.Labels()
+	if err != nil {
+		return notesView{}, err
+	}
+	v := notesView{Chrome: u.chrome(r, "notes"), Q: q, Label: label, Labels: defs}
+	counts := map[string]int{}
+	total := 0
 	for _, n := range all {
-		if n.Matches(q) {
+		if !n.Matches(q) {
+			continue
+		}
+		total++
+		for _, l := range n.Labels {
+			counts[l]++
+		}
+		if label == "" || slices.Contains(n.Labels, label) {
 			v.Notes = append(v.Notes, n)
 		}
+	}
+	v.Tabs = append(v.Tabs, tab{Label: "All", URL: notesURL(q, ""), Count: total, Active: label == ""})
+	for _, d := range defs {
+		v.Tabs = append(v.Tabs, tab{Label: d.Name, URL: notesURL(q, d.Name), Count: counts[d.Name], Active: label == d.Name})
 	}
 	if u.ai != nil {
 		st, err := u.ai.Status()
@@ -44,8 +67,7 @@ func (u *UI) notesView(r *http.Request, q string) (notesView, error) {
 }
 
 func (u *UI) notesPage(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
-	v, err := u.notesView(r, q)
+	v, err := u.notesView(r, r.URL.Query().Get("q"), r.URL.Query().Get("label"))
 	if err != nil {
 		u.fail(w, r, err)
 		return
@@ -63,13 +85,14 @@ func (u *UI) notesPage(w http.ResponseWriter, r *http.Request) {
 
 func (u *UI) createNote(w http.ResponseWriter, r *http.Request) {
 	body := r.PostFormValue("body")
-	if _, err := u.notes.Submit(body, actor(r)); err != nil {
-		v, verr := u.notesView(r, "")
+	picked := r.PostForm["labels"]
+	if _, err := u.notes.Submit(body, actor(r), picked); err != nil {
+		v, verr := u.notesView(r, "", "")
 		if verr != nil {
 			u.fail(w, r, verr)
 			return
 		}
-		v.Draft, v.Flash = body, flash{"error", err.Error()}
+		v.Draft, v.Picked, v.Flash = body, picked, flash{"error", err.Error()}
 		u.render(w, r, http.StatusUnprocessableEntity, notesListPage(v))
 		return
 	}
@@ -93,6 +116,7 @@ func (u *UI) note(w http.ResponseWriter, r *http.Request) (notes.Note, bool) {
 type noteView struct {
 	Chrome   chrome
 	Note     notes.Note
+	Labels   []notes.Label
 	BodyHTML string
 	Flash    flash
 }
@@ -107,7 +131,12 @@ func (u *UI) noteDetail(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, r, err)
 		return
 	}
-	v := noteView{Chrome: u.chrome(r, "notes"), Note: n, BodyHTML: body.String()}
+	defs, err := u.notes.Labels()
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	v := noteView{Chrome: u.chrome(r, "notes"), Note: n, Labels: defs, BodyHTML: body.String()}
 	if n.Pending && n.Error != "" {
 		v.Flash = flash{"warn", "Saving this note failed and will be retried: " + n.Error}
 	}
@@ -134,7 +163,24 @@ type noteFormView struct {
 	Chrome      chrome
 	ID          string
 	Title, Body string
+	Labels      []notes.Label // defined, plus any the note has that aren't
+	Picked      []string
 	Error       string
+}
+
+// formLabels is the defined labels plus any the note has without a
+// definition, so they can be kept or taken off.
+func (u *UI) formLabels(have []string) ([]notes.Label, error) {
+	defs, err := u.notes.Labels()
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range have {
+		if !slices.ContainsFunc(defs, func(d notes.Label) bool { return d.Name == l }) {
+			defs = append(defs, notes.Label{Name: l, Description: "(no longer defined)"})
+		}
+	}
+	return defs, nil
 }
 
 func (u *UI) editNote(w http.ResponseWriter, r *http.Request) {
@@ -146,14 +192,19 @@ func (u *UI) editNote(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/notes/"+n.ID, http.StatusSeeOther)
 		return
 	}
-	u.render(w, r, http.StatusOK, noteForm(noteFormView{Chrome: u.chrome(r, "notes"), ID: n.ID, Title: n.Title, Body: n.Body}))
+	labels, err := u.formLabels(n.Labels)
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	u.render(w, r, http.StatusOK, noteForm(noteFormView{Chrome: u.chrome(r, "notes"), ID: n.ID, Title: n.Title, Body: n.Body, Labels: labels, Picked: n.Labels}))
 }
 
 func (u *UI) saveNote(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
-	_, err := u.notes.Edit(ctx, id, r.PostFormValue("title"), r.PostFormValue("body"), actor(r))
+	_, err := u.notes.Edit(ctx, id, r.PostFormValue("title"), r.PostFormValue("body"), r.PostForm["labels"], actor(r))
 	switch {
 	case errors.Is(err, notes.ErrNotFound):
 		u.render(w, r, http.StatusNotFound, errorPage(u.chrome(r, "notes"), "No note with that id. It may have been deleted."))
@@ -161,8 +212,10 @@ func (u *UI) saveNote(w http.ResponseWriter, r *http.Request) {
 		if !errors.Is(err, notes.ErrPending) {
 			u.log.Warn("editing note", "id", id, "err", err)
 		}
+		labels, _ := u.formLabels(r.PostForm["labels"])
 		u.render(w, r, http.StatusUnprocessableEntity, noteForm(noteFormView{
-			Chrome: u.chrome(r, "notes"), ID: id, Title: r.PostFormValue("title"), Body: r.PostFormValue("body"), Error: err.Error(),
+			Chrome: u.chrome(r, "notes"), ID: id, Title: r.PostFormValue("title"), Body: r.PostFormValue("body"),
+			Labels: labels, Picked: r.PostForm["labels"], Error: err.Error(),
 		}))
 	default:
 		http.Redirect(w, r, "/notes/"+id, http.StatusSeeOther)
@@ -276,4 +329,96 @@ func keyPlaceholder(v aiView) string {
 		return "Leave empty to keep the current key"
 	}
 	return ""
+}
+
+func notesURL(q, label string) string {
+	v := url.Values{}
+	if q != "" {
+		v.Set("q", q)
+	}
+	if label != "" {
+		v.Set("label", label)
+	}
+	if len(v) == 0 {
+		return "/notes"
+	}
+	return "/notes?" + v.Encode()
+}
+
+// labelMeaning is a label's description, for tooltips.
+func labelMeaning(defs []notes.Label, name string) string {
+	for _, d := range defs {
+		if d.Name == name {
+			return d.Description
+		}
+	}
+	return "(no longer defined)"
+}
+
+// --- Settings → Labels -------------------------------------------------------
+
+type labelsView struct {
+	Chrome            chrome
+	Labels            []notes.Label
+	Flash             flash
+	Name, Description string // the add form, kept on error
+}
+
+func (u *UI) labelsView(r *http.Request) (labelsView, error) {
+	defs, err := u.notes.LabelsInUse()
+	return labelsView{Chrome: u.chrome(r, "labels"), Labels: defs}, err
+}
+
+func (u *UI) labelsPage(w http.ResponseWriter, r *http.Request) {
+	v, err := u.labelsView(r)
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	u.render(w, r, http.StatusOK, labelsSettingsPage(v))
+}
+
+// putLabel adds a label or changes its meaning.
+func (u *UI) putLabel(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+	defer cancel()
+	name, desc := r.PostFormValue("name"), r.PostFormValue("description")
+	l, err := u.notes.PutLabel(ctx, name, desc, actor(r))
+	v, verr := u.labelsView(r)
+	if verr != nil {
+		u.fail(w, r, verr)
+		return
+	}
+	if err != nil {
+		v.Flash, v.Name, v.Description = flash{"error", err.Error()}, name, desc
+		u.render(w, r, http.StatusUnprocessableEntity, labelsSettingsPage(v))
+		return
+	}
+	u.log.Info("note label saved", "label", l.Name, "user", actor(r))
+	v.Flash = flash{"ok", "Saved “" + l.Name + "”."}
+	u.render(w, r, http.StatusOK, labelsSettingsPage(v))
+}
+
+func (u *UI) deleteLabel(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+	defer cancel()
+	name := r.PathValue("name")
+	err := u.notes.DeleteLabel(ctx, name, actor(r))
+	if err != nil && !errors.Is(err, notes.ErrLabelInUse) {
+		u.fail(w, r, err)
+		return
+	}
+	v, verr := u.labelsView(r)
+	if verr != nil {
+		u.fail(w, r, verr)
+		return
+	}
+	if err != nil {
+		v.Flash = flash{"error", err.Error()}
+		u.render(w, r, http.StatusConflict, labelsSettingsPage(v))
+		return
+	}
+	u.log.Info("note label deleted", "label", name, "user", actor(r))
+	v.Flash = flash{"ok", "Deleted “" + name + "”."}
+	u.render(w, r, http.StatusOK, labelsSettingsPage(v))
 }

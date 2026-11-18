@@ -129,6 +129,7 @@ func (s *Server) instructions(u state.User) string {
 		"Every tool takes an `intent`: one sentence on what the user asked for and why this call helps. It is logged.\n\n" +
 		"Start with search_transcripts (filters: words, type, participant, dates) and read one with get_transcript. " +
 		"Notes (search_notes, get_note) are free-form things people wrote down, separate from transcripts. " +
+		"Notes can have labels; list_note_labels says what each means (some may mark notes as unreviewed or unreliable). " +
 		"Use list_events to see meetings in a time range and which transcripts belong to them. " +
 		"Dates without an offset are in " + calendar.DefaultZone.String() + ".")
 	return b.String()

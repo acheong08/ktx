@@ -2,11 +2,13 @@
 // transcripts:
 //
 //	notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md   Markdown with YAML front matter
+//	notes/labels.yaml                         the labels notes can have, and what each means
 //
 // A new note is saved at once to a queue in the state database; a worker
 // then names it (package ai) and commits and pushes it, so whoever wrote it
-// doesn't wait. Until then it's listed as "Generating title…". Edits and
-// deletes are committed straight away.
+// doesn't wait. Until then it's listed as "Generating title…". The model
+// also adds labels whose meaning fits, to those the author picked. Edits,
+// deletes and label definitions are committed straight away.
 package notes
 
 import (
@@ -22,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -60,14 +63,15 @@ type Note struct {
 	EditedAt string
 	EditedBy string
 	Body     string
+	Labels   []string
 	Pending  bool   // not in git yet: being named or committed
 	Error    string // why the last attempt to save a pending note failed
 
 	search string
 }
 
-// Matches reports whether every word of q appears in the title, author or
-// text.
+// Matches reports whether every word of q appears in the title, author,
+// labels or text.
 func (n Note) Matches(q string) bool {
 	for _, w := range strings.Fields(strings.ToLower(q)) {
 		if !strings.Contains(n.search, w) {
@@ -78,11 +82,12 @@ func (n Note) Matches(q string) bool {
 }
 
 type meta struct {
-	Title    string `yaml:"title"`
-	Created  string `yaml:"created"`
-	Author   string `yaml:"author"`
-	EditedAt string `yaml:"edited_at,omitempty"`
-	EditedBy string `yaml:"edited_by,omitempty"`
+	Title    string   `yaml:"title"`
+	Created  string   `yaml:"created"`
+	Author   string   `yaml:"author"`
+	EditedAt string   `yaml:"edited_at,omitempty"`
+	EditedBy string   `yaml:"edited_by,omitempty"`
+	Labels   []string `yaml:"labels,omitempty,flow"`
 }
 
 // Service stores notes and runs the worker that saves new ones.
@@ -129,13 +134,17 @@ func (s *Service) Start(ctx context.Context) {
 
 // Submit queues a new note and returns its id. The note is named and
 // committed in the background.
-func (s *Service) Submit(body, author string) (string, error) {
+func (s *Service) Submit(body, author string, labels []string) (string, error) {
 	body = normalize(body)
 	if strings.TrimSpace(body) == "" {
 		return "", errors.New("the note is empty")
 	}
+	labels, err := s.checkLabels(labels, nil)
+	if err != nil {
+		return "", err
+	}
 	id := newID()
-	if err := s.db.AddPendingNote(state.PendingNote{ID: id, Author: author, Body: body, CreatedAt: s.now()}); err != nil {
+	if err := s.db.AddPendingNote(state.PendingNote{ID: id, Author: author, Body: body, Labels: labels, CreatedAt: s.now()}); err != nil {
 		return "", err
 	}
 	select {
@@ -164,8 +173,13 @@ func (s *Service) drain(ctx context.Context) {
 
 // save names a pending note and commits it.
 func (s *Service) save(ctx context.Context, p state.PendingNote) error {
-	title, how := s.title(ctx, p.Body)
-	n := Note{ID: p.ID, Title: title, Created: p.CreatedAt.In(calendar.DefaultZone), Author: p.Author, Body: p.Body}
+	defs, err := s.Labels()
+	if err != nil {
+		return err
+	}
+	title, suggested, how := s.describe(ctx, p.Body, defs)
+	n := Note{ID: p.ID, Title: title, Created: p.CreatedAt.In(calendar.DefaultZone), Author: p.Author, Body: p.Body,
+		Labels: ordered(append(slices.Clone(p.Labels), suggested...), defs)}
 	gctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	res, err := s.repo.Update(gctx, func(root string) (gitrepo.Change, error) {
@@ -182,40 +196,45 @@ func (s *Service) save(ctx context.Context, p state.PendingNote) error {
 	if err := s.db.DeletePendingNote(p.ID); err != nil {
 		return err
 	}
-	s.log.Info("note saved", "id", n.ID, "path", n.Path, "title", n.Title, "titled_by", how,
+	s.log.Info("note saved", "id", n.ID, "path", n.Path, "title", n.Title, "labels", n.Labels, "suggested", suggested, "titled_by", how,
 		"author", n.Author, "commit", res.Commit, "pushed", res.Pushed)
 	return nil
 }
 
-// title asks the model, retrying once, and falls back to the first line.
-func (s *Service) title(ctx context.Context, body string) (title, how string) {
+// describe asks the model for a title and labels, retrying once; without
+// it the title is the first line and there are no suggested labels.
+func (s *Service) describe(ctx context.Context, body string, defs []Label) (title string, labels []string, how string) {
 	if s.ai == nil {
-		return ai.FallbackTitle(body), "first line"
+		return ai.FallbackTitle(body), nil, "first line"
+	}
+	aiDefs := make([]ai.LabelDef, len(defs))
+	for i, d := range defs {
+		aiDefs[i] = ai.LabelDef{Name: d.Name, Description: d.Description}
 	}
 	cfg, err := s.ai.Config()
 	if err != nil {
 		if !errors.Is(err, ai.ErrNotConfigured) {
 			s.log.Error("ai settings", "err", err)
 		}
-		return ai.FallbackTitle(body), "first line"
+		return ai.FallbackTitle(body), nil, "first line"
 	}
 	for try := 1; try <= s.aiTries; try++ {
 		cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		t, err := ai.Title(cctx, cfg, body)
+		t, labels, err := ai.Describe(cctx, cfg, body, aiDefs)
 		cancel()
 		if err == nil {
-			return t, cfg.Model
+			return t, labels, cfg.Model
 		}
 		s.log.Warn("generating a note title failed", "model", cfg.Model, "try", try, "err", err)
 		if try < s.aiTries {
 			select {
 			case <-ctx.Done():
-				return ai.FallbackTitle(body), "first line"
+				return ai.FallbackTitle(body), nil, "first line"
 			case <-time.After(s.aiBackoff):
 			}
 		}
 	}
-	return ai.FallbackTitle(body), "first line"
+	return ai.FallbackTitle(body), nil, "first line"
 }
 
 // List returns every note, pending ones included, newest first.
@@ -277,7 +296,7 @@ func (s *Service) Get(id string) (Note, error) {
 
 // Edit changes a note's title and text in one commit, renaming the file if
 // the title changed.
-func (s *Service) Edit(ctx context.Context, id, title, body, user string) (Note, error) {
+func (s *Service) Edit(ctx context.Context, id, title, body string, labels []string, user string) (Note, error) {
 	title = strings.Join(strings.Fields(title), " ")
 	body = normalize(body)
 	if title == "" {
@@ -298,10 +317,18 @@ func (s *Service) Edit(ctx context.Context, id, title, body, user string) (Note,
 		if n, err = readNote(root, rel); err != nil {
 			return gitrepo.Change{}, err
 		}
-		if n.Title == title && n.Body == body {
+		defs, err := readLabels(root)
+		if err != nil {
+			return gitrepo.Change{}, err
+		}
+		// A label kept from before stays even if its definition is gone.
+		if labels, err = checkLabelsIn(labels, defs, n.Labels); err != nil {
+			return gitrepo.Change{}, err
+		}
+		if n.Title == title && n.Body == body && slices.Equal(n.Labels, labels) {
 			return gitrepo.Change{}, nil
 		}
-		n.Title, n.Body = title, body
+		n.Title, n.Body, n.Labels = title, body, labels
 		n.EditedAt, n.EditedBy = s.now().In(calendar.DefaultZone).Format(time.RFC3339), user
 		n.Path = path.Join(Root, fileName(n))
 		ch := gitrepo.Change{Paths: []string{n.Path}, Message: commitMessage("Edit note", n.Title, n.ID, user)}
@@ -345,8 +372,8 @@ func (s *Service) missing(id string) error {
 }
 
 func pendingNote(p state.PendingNote) Note {
-	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone), Author: p.Author, Body: p.Body, Pending: true, Error: p.Error}
-	n.search = strings.ToLower(n.Author + "\n" + n.Body)
+	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone), Author: p.Author, Body: p.Body, Labels: p.Labels, Pending: true, Error: p.Error}
+	n.search = strings.ToLower(n.Author + "\n" + strings.Join(n.Labels, " ") + "\n" + n.Body)
 	return n
 }
 
@@ -381,7 +408,7 @@ func render(n Note) []byte {
 	b.WriteString("---\n")
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
-	_ = enc.Encode(meta{Title: n.Title, Created: n.Created.Format(time.RFC3339), Author: n.Author, EditedAt: n.EditedAt, EditedBy: n.EditedBy})
+	_ = enc.Encode(meta{Title: n.Title, Created: n.Created.Format(time.RFC3339), Author: n.Author, EditedAt: n.EditedAt, EditedBy: n.EditedBy, Labels: n.Labels})
 	b.WriteString("---\n")
 	b.WriteString(n.Body)
 	if !strings.HasSuffix(n.Body, "\n") {
@@ -404,7 +431,7 @@ func readNote(root, rel string) (Note, error) {
 		if fm, b, ok := strings.Cut(rest, "\n---\n"); ok {
 			var m meta
 			if err := yaml.Unmarshal([]byte(fm), &m); err == nil {
-				n.Title, n.Author, n.EditedAt, n.EditedBy = m.Title, m.Author, m.EditedAt, m.EditedBy
+				n.Title, n.Author, n.EditedAt, n.EditedBy, n.Labels = m.Title, m.Author, m.EditedAt, m.EditedBy, m.Labels
 				if t, err := time.Parse(time.RFC3339, m.Created); err == nil {
 					n.Created = t
 				}
@@ -416,7 +443,7 @@ func readNote(root, rel string) (Note, error) {
 	if n.Title == "" {
 		n.Title = ai.FallbackTitle(body)
 	}
-	n.search = strings.ToLower(n.Title + "\n" + n.Author + "\n" + n.Body)
+	n.search = strings.ToLower(n.Title + "\n" + n.Author + "\n" + strings.Join(n.Labels, " ") + "\n" + n.Body)
 	return n, nil
 }
 

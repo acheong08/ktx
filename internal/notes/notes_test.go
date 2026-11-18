@@ -3,6 +3,7 @@ package notes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -139,14 +140,14 @@ func TestNoteTitledByModelAndCommitted(t *testing.T) {
 	}
 
 	// Queued before the worker runs (as after a restart): listed as pending.
-	id, err := e.svc.Submit("Call with Acme\r\nThey want usage-based pricing.\r\n", "antonio")
+	id, err := e.svc.Submit("Call with Acme\r\nThey want usage-based pricing.\r\n", "antonio", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := e.svc.List(); len(list) != 1 || !list[0].Pending || list[0].Title != "" {
 		t.Fatalf("pending list: %+v", list)
 	}
-	if _, err := e.svc.Edit(context.Background(), id, "x", "y", "antonio"); err != ErrPending {
+	if _, err := e.svc.Edit(context.Background(), id, "x", "y", nil, "antonio"); err != ErrPending {
 		t.Fatalf("edit while pending: %v", err)
 	}
 
@@ -180,7 +181,7 @@ func TestNoteTitledByModelAndCommitted(t *testing.T) {
 	}
 
 	// Edit renames the file; delete removes it.
-	n, err = e.svc.Edit(context.Background(), id, "Acme pricing", "Usage-based.\r\n", "maxim")
+	n, err = e.svc.Edit(context.Background(), id, "Acme pricing", "Usage-based.\r\n", nil, "maxim")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestNoteFallsBackToFirstLine(t *testing.T) {
 	e.start(t)
 
 	// No key: the first line.
-	id, _ := e.svc.Submit("\n# Ideas for the demo\n- show calendar linking\n", "maxim")
+	id, _ := e.svc.Submit("\n# Ideas for the demo\n- show calendar linking\n", "maxim", nil)
 	if n := e.wait(t, id); n.Title != "Ideas for the demo" {
 		t.Fatalf("no key: %q", n.Title)
 	}
@@ -219,7 +220,7 @@ func TestNoteFallsBackToFirstLine(t *testing.T) {
 	e.llm.fail = true
 	before := len(e.llm.reqs)
 	e.llm.mu.Unlock()
-	id, _ = e.svc.Submit("Remember to renew the domain", "maxim")
+	id, _ = e.svc.Submit("Remember to renew the domain", "maxim", nil)
 	if n := e.wait(t, id); n.Title != "Remember to renew the domain" {
 		t.Fatalf("provider down: %q", n.Title)
 	}
@@ -237,14 +238,14 @@ func TestNoteFallsBackToFirstLine(t *testing.T) {
 	if st, _ := e.ai.Status(); st.KeyHint != "…efgh" {
 		t.Fatalf("key replaced: %+v", st)
 	}
-	if _, err := e.svc.Submit("  \r\n ", "maxim"); err == nil {
+	if _, err := e.svc.Submit("  \r\n ", "maxim", nil); err == nil {
 		t.Fatal("empty note accepted")
 	}
 }
 
 func TestCleanAndFallbackTitles(t *testing.T) {
 	for in, want := range map[string]string{
-		`"Q4 hiring plan"`:            "Q4 hiring plan",
+		`"Q4 hiring plan"`:             "Q4 hiring plan",
 		"Title: **Board prep.**\nmore": "Board prep",
 		"## Investor update\n":         "Investor update",
 	} {
@@ -257,5 +258,88 @@ func TestCleanAndFallbackTitles(t *testing.T) {
 	}
 	if got := ai.FallbackTitle(" \n "); got != "Untitled note" {
 		t.Errorf("empty fallback = %q", got)
+	}
+}
+
+func TestLabels(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	if _, err := e.svc.PutLabel(ctx, "Slop", "Pasted AI output, not reviewed", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.PutLabel(ctx, "competitors", "About other companies in our space", "maxim"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.PutLabel(ctx, "bad name!", "x", "maxim"); err == nil {
+		t.Fatal("invalid name accepted")
+	}
+	if _, err := e.svc.PutLabel(ctx, "empty", " ", "maxim"); err == nil {
+		t.Fatal("label without meaning accepted")
+	}
+	// Changing a meaning keeps the order.
+	if _, err := e.svc.PutLabel(ctx, "slop", "Pasted AI output; don't trust it as fact", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	file := gitShow(t, e.remote, "main:notes/labels.yaml")
+	if !strings.Contains(file, "- name: slop\n  description: Pasted AI output; don't trust it as fact\n- name: competitors\n") {
+		t.Fatalf("labels.yaml:\n%s", file)
+	}
+	if log := gitShow(t, e.remote, "main"); !strings.Contains(log, "Change note label: slop") {
+		t.Fatalf("commit:\n%s", log)
+	}
+
+	if _, err := e.svc.Submit("text", "maxim", []string{"nope"}); err == nil {
+		t.Fatal("undefined label accepted")
+	}
+
+	// The model gets the meanings and adds a fitting label; invented ones are dropped.
+	if err := e.ai.Save(ctx, "nw-secret-key-1234", "", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	e.llm.mu.Lock()
+	e.llm.title = "Title: Rival pricing pages\nLabels: competitors, invented"
+	e.llm.mu.Unlock()
+	e.start(t)
+	id, err := e.svc.Submit("ChatGPT says Acme charges per seat…", "maxim", []string{"slop", "slop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := e.svc.Get(id); !p.Pending || strings.Join(p.Labels, ",") != "slop" {
+		t.Fatalf("pending labels: %+v", p)
+	}
+	n := e.wait(t, id)
+	if n.Title != "Rival pricing pages" || strings.Join(n.Labels, ",") != "slop,competitors" {
+		t.Fatalf("note: %q %v", n.Title, n.Labels)
+	}
+	if file := gitShow(t, e.remote, "main:"+n.Path); !strings.Contains(file, "labels: [slop, competitors]\n") {
+		t.Fatalf("file:\n%s", file)
+	}
+	e.llm.mu.Lock()
+	sys, _ := json.Marshal(e.llm.reqs[len(e.llm.reqs)-1]["messages"])
+	e.llm.mu.Unlock()
+	if !strings.Contains(string(sys), "- slop: Pasted AI output; don't trust it as fact") {
+		t.Fatalf("prompt: %s", sys)
+	}
+	if !n.Matches("competitors") {
+		t.Fatal("labels aren't searchable")
+	}
+
+	// In use: can't be deleted; counts are right.
+	defs, _ := e.svc.LabelsInUse()
+	if defs[0].Count != 1 || defs[1].Count != 1 {
+		t.Fatalf("counts: %+v", defs)
+	}
+	if err := e.svc.DeleteLabel(ctx, "slop", "antonio"); !errors.Is(err, ErrLabelInUse) {
+		t.Fatalf("delete in use: %v", err)
+	}
+	// Take it off by editing, then delete.
+	if n, err = e.svc.Edit(ctx, id, n.Title, n.Body, []string{"competitors"}, "maxim"); err != nil || strings.Join(n.Labels, ",") != "competitors" {
+		t.Fatalf("edit labels: %v %v", n.Labels, err)
+	}
+	if err := e.svc.DeleteLabel(ctx, "slop", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if defs, _ := e.svc.Labels(); len(defs) != 1 || defs[0].Name != "competitors" {
+		t.Fatalf("after delete: %+v", defs)
 	}
 }
