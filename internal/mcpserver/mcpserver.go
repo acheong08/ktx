@@ -17,6 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/acheong08/ktx/internal/calendar"
+	"github.com/acheong08/ktx/internal/notes"
 	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
 )
@@ -31,15 +32,16 @@ type Verifier interface {
 type Server struct {
 	store   *store.Store
 	cal     *calendar.Service // nil: no calendar tools
+	notes   *notes.Service    // nil: no note tools
 	tokens  Verifier
 	log     *slog.Logger
 	version string
 	handler http.Handler
 }
 
-// New builds the MCP server. cal may be nil.
-func New(st *store.Store, cal *calendar.Service, tokens Verifier, version string, log *slog.Logger) *Server {
-	s := &Server{store: st, cal: cal, tokens: tokens, log: log, version: version}
+// New builds the MCP server. cal and nt may be nil.
+func New(st *store.Store, cal *calendar.Service, nt *notes.Service, tokens Verifier, version string, log *slog.Logger) *Server {
+	s := &Server{store: st, cal: cal, notes: nt, tokens: tokens, log: log, version: version}
 	s.handler = mcp.NewStreamableHTTPHandler(s.server, &mcp.StreamableHTTPOptions{
 		Stateless:    true, // every tool is a plain read; nothing to keep between requests
 		JSONResponse: true,
@@ -107,7 +109,7 @@ func (s *Server) server(r *http.Request) *mcp.Server {
 func (s *Server) instructions(u state.User) string {
 	var b strings.Builder
 	b.WriteString("ktx is Melzi's company brain: transcripts of calls and meetings (from Granola, Pocket, and uploads), " +
-		"and the team's calendars. Transcripts are linked to the calendar event they were recorded in, " +
+		"the team's notes, and the team's calendars. Transcripts are linked to the calendar event they were recorded in, " +
 		"and carry the event's guests as participants.\n\n")
 	fmt.Fprintf(&b, "You are acting for %s", u.Display())
 	if u.Name != "" && u.Name != u.Display() {
@@ -126,6 +128,7 @@ func (s *Server) instructions(u state.User) string {
 	b.WriteString("Access is read-only.\n\n" +
 		"Every tool takes an `intent`: one sentence on what the user asked for and why this call helps. It is logged.\n\n" +
 		"Start with search_transcripts (filters: words, type, participant, dates) and read one with get_transcript. " +
+		"Notes (search_notes, get_note) are free-form things people wrote down, separate from transcripts. " +
 		"Use list_events to see meetings in a time range and which transcripts belong to them. " +
 		"Dates without an offset are in " + calendar.DefaultZone.String() + ".")
 	return b.String()

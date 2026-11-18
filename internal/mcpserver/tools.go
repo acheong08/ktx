@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/acheong08/ktx/internal/calendar"
+	"github.com/acheong08/ktx/internal/notes"
 	"github.com/acheong08/ktx/internal/store"
 )
 
@@ -26,6 +27,8 @@ func (i getIn) intentText() string           { return i.Intent }
 func (i listTypesIn) intentText() string     { return i.Intent }
 func (i listCalendarsIn) intentText() string { return i.Intent }
 func (i listEventsIn) intentText() string    { return i.Intent }
+func (i searchNotesIn) intentText() string   { return i.Intent }
+func (i getNoteIn) intentText() string       { return i.Intent }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -66,6 +69,19 @@ func (s *Server) addTools(srv *mcp.Server, c caller) {
 		Title:       "List transcript types",
 		Description: "The transcript types (e.g. customer_discovery, internal) with how many transcripts each has.",
 	}, s.listTypes)
+	if s.notes != nil {
+		addTool(srv, s, c, &mcp.Tool{
+			Name:  "search_notes",
+			Title: "Search notes",
+			Description: "Find notes people wrote in ktx (separate from transcripts), newest first. All filters are optional. " +
+				"Returns titles, authors and, with a query, a snippet; read one with get_note.",
+		}, s.searchNotes)
+		addTool(srv, s, c, &mcp.Tool{
+			Name:        "get_note",
+			Title:       "Read a note",
+			Description: "Read one note: its title, author, dates and text (Markdown).",
+		}, s.getNote)
+	}
 	if s.cal == nil {
 		return
 	}
@@ -571,4 +587,110 @@ func linkKey(uid, rid string) string {
 		rid = t.UTC().Format(time.RFC3339)
 	}
 	return uid + "|" + rid
+}
+
+// --- notes -----------------------------------------------------------------
+
+type noteSummary struct {
+	ID        string `json:"id"`
+	Title     string `json:"title" jsonschema:"empty while the note is still being saved"`
+	Created   string `json:"created"`
+	Author    string `json:"author"`
+	Pending   bool   `json:"pending,omitempty" jsonschema:"just written: its title is being generated and it isn't in git yet"`
+	TextBytes int    `json:"text_bytes"`
+	Snippet   string `json:"snippet,omitempty"`
+}
+
+func summarizeNote(n notes.Note) noteSummary {
+	return noteSummary{ID: n.ID, Title: n.Title, Created: formatTime(n.Created), Author: n.Author, Pending: n.Pending, TextBytes: len(n.Body)}
+}
+
+type searchNotesIn struct {
+	Intent string `json:"intent" jsonschema:"One sentence: what the user asked for and why this call helps. Logged for the people whose data this is."`
+	Query  string `json:"query,omitempty" jsonschema:"words that must all appear (case-insensitive) in the title, author or text"`
+	Author string `json:"author,omitempty" jsonschema:"only notes by this person (ktx username)"`
+	From   string `json:"from,omitempty" jsonschema:"only notes written on or after this date (YYYY-MM-DD) or time (RFC 3339)"`
+	To     string `json:"to,omitempty" jsonschema:"only notes written up to and including this date, or before this time"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"how many to return (default 20, at most 100)"`
+	Offset int    `json:"offset,omitempty" jsonschema:"skip this many, for the next page"`
+}
+
+type searchNotesOut struct {
+	Total      int           `json:"total"`
+	Notes      []noteSummary `json:"notes"`
+	NextOffset int           `json:"next_offset,omitempty"`
+}
+
+func (s *Server) searchNotes(_ context.Context, in searchNotesIn) (searchNotesOut, error) {
+	var from, to time.Time
+	var err error
+	if in.From != "" {
+		if from, err = parseWhen(in.From, false); err != nil {
+			return searchNotesOut{}, fmt.Errorf("from: %w", err)
+		}
+	}
+	if in.To != "" {
+		if to, err = parseWhen(in.To, true); err != nil {
+			return searchNotesOut{}, fmt.Errorf("to: %w", err)
+		}
+	}
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	limit = min(limit, 100)
+	offset := max(in.Offset, 0)
+	all, err := s.notes.List()
+	if err != nil {
+		return searchNotesOut{}, err
+	}
+	out := searchNotesOut{Notes: []noteSummary{}}
+	for _, n := range all {
+		switch {
+		case in.Author != "" && !strings.EqualFold(n.Author, strings.TrimSpace(in.Author)),
+			!from.IsZero() && n.Created.Before(from),
+			!to.IsZero() && !n.Created.Before(to),
+			!n.Matches(in.Query):
+			continue
+		}
+		out.Total++
+		if out.Total <= offset || len(out.Notes) >= limit {
+			continue
+		}
+		ns := summarizeNote(n)
+		ns.Snippet = snippet(n.Body, in.Query)
+		out.Notes = append(out.Notes, ns)
+	}
+	if offset+len(out.Notes) < out.Total {
+		out.NextOffset = offset + len(out.Notes)
+	}
+	return out, nil
+}
+
+type getNoteIn struct {
+	Intent string `json:"intent" jsonschema:"One sentence: what the user asked for and why this call helps. Logged for the people whose data this is."`
+	ID     string `json:"id" jsonschema:"the note id (12 hex characters), from search_notes"`
+}
+
+type getNoteOut struct {
+	noteSummary
+	Path     string `json:"path,omitempty" jsonschema:"file in the company-brain repository"`
+	EditedBy string `json:"edited_by,omitempty"`
+	EditedAt string `json:"edited_at,omitempty"`
+	Text     string `json:"text"`
+}
+
+func (s *Server) getNote(_ context.Context, in getNoteIn) (getNoteOut, error) {
+	id := strings.ToLower(strings.TrimSpace(in.ID))
+	if !notes.ValidID(id) {
+		return getNoteOut{}, fmt.Errorf("%q is not a note id (12 hex characters)", in.ID)
+	}
+	n, err := s.notes.Get(id)
+	if errors.Is(err, notes.ErrNotFound) {
+		return getNoteOut{}, fmt.Errorf("no note with id %s", id)
+	}
+	if err != nil {
+		return getNoteOut{}, err
+	}
+	return getNoteOut{noteSummary: summarizeNote(n), Path: n.Path, EditedBy: n.EditedBy, EditedAt: n.EditedAt, Text: n.Body}, nil
 }

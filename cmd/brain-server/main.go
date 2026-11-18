@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/acheong08/ktx/internal/ai"
 	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/config"
 	"github.com/acheong08/ktx/internal/connectors"
@@ -22,6 +23,7 @@ import (
 	"github.com/acheong08/ktx/internal/dav"
 	"github.com/acheong08/ktx/internal/gitrepo"
 	"github.com/acheong08/ktx/internal/mcpserver"
+	"github.com/acheong08/ktx/internal/notes"
 	"github.com/acheong08/ktx/internal/oauth"
 	"github.com/acheong08/ktx/internal/secrets"
 	"github.com/acheong08/ktx/internal/server"
@@ -138,13 +140,17 @@ func run(log *slog.Logger) error {
 			types = append(types, t)
 		}
 	}
-	ui := web.Options{Store: st, Types: types, Log: log, DB: db, Auth: auth, Calendar: cal}
+	aiSettings := ai.NewSettings(db, box) // without a master key, notes get first-line titles
+	nts := notes.New(repo, db, aiSettings, log)
+	nts.Start(ctx) // names and commits notes in the background, including ones queued before a restart
+	ui := web.Options{Store: st, Types: types, Log: log, DB: db, Auth: auth, Calendar: cal, Notes: nts}
 	if auth != nil {
+		ui.AI = aiSettings    // admins set the key
 		ui.Connectors = conns // connections belong to people, so they need sign-in
 		// MCP for agents: apps get tokens over OAuth, approved by a signed-in person.
 		ui.OAuth = oauth.New(db, cfg.PublicURL, log)
 		ui.OAuth.Register(mux)
-		mcpserver.New(st, cal, ui.OAuth, version(), log).Register(mux)
+		mcpserver.New(st, cal, nts, ui.OAuth, version(), log).Register(mux)
 		log.Info("MCP server enabled", "url", ui.OAuth.ResourceURL())
 	}
 	mux.Handle("/", web.New(ui).Handler())

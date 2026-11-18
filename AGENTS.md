@@ -10,15 +10,17 @@ One Go service, **brain-server**, owning a clone of the data repo `git@github.co
 transcripts/<type>/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md   Markdown + YAML front matter; folder = type ("unsorted" = none)
 calendar/<owner>/<calendar>/calendar.json             name, colour, description
 calendar/<owner>/<calendar>/<uid>.ics                 one event (series + overrides + VTIMEZONEs)
+notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md              scratchpad notes: title, created, author (+ edited_*)
 .ktx/deleted                                          ids deleted in the UI, so syncs don't bring them back
 ```
 
 Ways in:
 - **API:** `POST /v1/transcripts` (Bearer API token). There is no other upload endpoint; meetings are transcripts of a type.
-- **Web UI** (htmx 4 + templ), sign-in through Pocket ID (OIDC). Pages: Transcripts (list, search, bulk type edit, detail, edit, new, delete) and Settings → Connections / Calendar / Tokens.
+- **Web UI** (htmx 4 + templ), sign-in through Pocket ID (OIDC). Pages: Transcripts (list, search, bulk type edit, detail, edit, new, delete), Notes, and Settings → Connections / Calendar / Tokens / AI.
 - **Connectors** (inside the service, per-user credentials): Granola (REST API, Business key) and Pocket. Each has a "Type for …" setting for where *new* documents go; documents already stored stay where they are.
+- **Notes** (web UI scratchpad): saved to `pending_notes` in SQLite, then a worker titles them (Neuralwatt via fantasy, workspace key set by admins in Settings → AI; fallback first line) and commits. Edits/deletes are synchronous.
 - **CalDAV** at `/dav/` (Apple Calendar, Thunderbird), Basic auth with a calendar-scoped token.
-- **MCP** at `/mcp` (read-only tools over transcripts and calendars; every call needs an `intent`, logged as `mcp call`). ktx is its own OAuth server (DCR, PKCE, rotating refresh tokens); consent at `/oauth/authorize` uses the normal Pocket ID sign-in. Only when OIDC is configured.
+- **MCP** at `/mcp` (read-only tools over transcripts, notes and calendars; every call needs an `intent`, logged as `mcp call`). ktx is its own OAuth server (DCR, PKCE, rotating refresh tokens); consent at `/oauth/authorize` uses the normal Pocket ID sign-in. Only when OIDC is configured.
 
 Key behaviours:
 - Document id = sha256(source+source_id)[:12], else hash of content. A file is found by its `-<id>.md` suffix anywhere under `transcripts/`, so moving between type folders keeps identity.
@@ -37,10 +39,12 @@ internal/transcript      Parse/ParseStored/Render; Doc keeps the YAML node (orde
 internal/store           Put/PutBatch(Item{Doc, DefaultType, Sync})/Edit/EditLinks/SetType/SetTypes/Delete/List/Get/Relink; Linker interface
 internal/calendar        git-backed calendars, .ics import (upsert, never delete), RRULE expansion, time zones (incl. Windows names), Match/Linker, Service
 internal/dav             CalDAV on go-webdav; adds MKCALENDAR, PROPPATCH (name/colour), getctag + supported-report-set rewriting of PROPFIND
-internal/state           SQLite with PRAGMA user_version migrations: users, sessions, api_tokens(scope api|caldav), oauth_clients, oauth_grants, connections, runs
+internal/state           SQLite with PRAGMA user_version migrations: users, sessions, api_tokens(scope api|caldav), oauth_clients, oauth_grants, settings, pending_notes, connections, runs
 internal/secrets         AES-256-GCM sealing, master key from systemd credential ktx-master-key
 internal/connectors      Manager (workers, runs, sealing) + granola/ + pocket/
 internal/server          POST /v1/transcripts, GET /healthz
+internal/ai              Settings (sealed Neuralwatt key + model in `settings`), Title() via charm.land/fantasy openaicompat (reasoning_effort none), CleanTitle/FallbackTitle
+internal/notes           notes/ in git + pending queue worker (Submit/List/Get/Edit/Delete)
 internal/oauth           OAuth 2.1 authorization server for MCP clients: metadata, /oauth/register, /oauth/token, codes (memory); consent page lives in web/oauth.go
 internal/mcpserver       /mcp on modelcontextprotocol/go-sdk (stateless, JSON responses, localhost protection off: Caddy is local); tools.go
 internal/web             handlers + *.templ (generated *_templ.go are committed); static/{app.js,style.css,htmx.min.js}
@@ -106,5 +110,6 @@ UI checks without a passkey: write a throwaway test (not committed) that calls `
 - Antonio will remove the agent's root SSH key from the box.
 - Calendar: invitations aren't sent; no sync-collection; a name-only participant plus the same person from the calendar (with email) shows twice.
 - Johann's pasted transcript says 2:00 PM; Granola says 12:00 PM (unconfirmed which is right).
+- fantasy keys provider options by provider name: don't `WithName` the openaicompat provider, or `reasoning_effort` is silently dropped.
 - MCP is read-only for now; write tools (uploads, types, event links, events) are a possible next step.
 - Later: bookings (Cal.com) through the calendar; possibly move outreach's Granola→Folk logging into ktx.

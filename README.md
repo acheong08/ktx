@@ -8,7 +8,8 @@ A small Go server that owns a clone of the brain git repository.
 - **Upload:** you send a transcript over HTTP. The server checks its metadata, writes it to `transcripts/<type>/` (or `transcripts/unsorted/`), commits, and pushes to GitHub.
 - **Web UI:** you can read, search and sort transcripts in a browser. People sign in through Pocket ID (passkeys).
 - **Connectors:** ktx pulls meeting notes from Granola on a schedule into `transcripts/meetings/`. Each person adds their own credential in the UI; it's stored encrypted.
-- **MCP:** AI agents read transcripts and calendars through an MCP server at `/mcp`, after a person allows them over OAuth.
+- **Notes:** a scratchpad in the web UI. Notes are committed to `notes/`, and get a title from an AI model (Neuralwatt) in the background.
+- **MCP:** AI agents read transcripts, notes and calendars through an MCP server at `/mcp`, after a person allows them over OAuth.
 - **Calendar:** ktx is a CalDAV server (Apple Calendar, Thunderbird). Calendars live in the repo as `.ics` files, and every transcript is linked to the event it was recorded in, which gives it the guests' email addresses.
 
 ```
@@ -131,17 +132,40 @@ The **API tokens** page lets each person create tokens for scripts (`POST /v1/tr
 
 **Connected apps** (same page) lists the MCP clients you allowed, when they were last used, and a Revoke button.
 
+## Notes
+
+Free-form notes, separate from transcripts, stored as `notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md`:
+
+```markdown
+---
+title: Acme pricing follow-up
+created: "2026-11-17T16:32:00-08:00"
+author: antonio
+---
+Talked to Jane at Acme. They want usage-based pricing and SSO before signing.
+```
+
+- **Scratchpad** (top of **Notes**): write, then Save (or Ctrl/⌘ + Enter). The note is saved right away to a queue in `state.db` and listed as "Generating title…". In the background ktx asks the model for a title, then commits (`Add note: <title>`, `Note-Id:`, `Changed-By:`) and pushes. The page fills in the title when it's ready. Queued notes survive a restart; a failed commit is retried every minute.
+- **Titles** come from the model in Settings → AI. Without a key, or if the model fails twice, the title is the note's first line. They're never regenerated: edit the title by hand.
+- **List, search, read, edit, delete** like transcripts. Everyone sees every note. Edits and deletes are committed straight away; a note can't be changed until its first commit is done.
+
+### Settings → AI
+
+One workspace-wide [Neuralwatt](https://neuralwatt.com) key (`https://api.neuralwatt.com/v1/`, OpenAI-compatible, called through [fantasy](https://github.com/charmbracelet/fantasy)). Only admins can set it; it's sealed with the master key like connector credentials, so there's no AI without one. The model defaults to `nw-flash`, Neuralwatt's alias for its current fast model, and is called with reasoning off. Saving checks the key and model with a test title. The first 8000 bytes of each note are sent to Neuralwatt.
+
 ## MCP
 
 `https://brain.internal.melzi.dev/mcp` is an MCP server (streamable HTTP, stateless) for AI agents. It needs sign-in to be configured (`BRAIN_OIDC_ISSUER`); without it there's no `/mcp`.
 
-**What an agent can do:** read, as the person who allowed it, everything that person sees in the web UI: every transcript and every calendar. Nothing can be changed. Tools:
+**What an agent can do:** read, as the person who allowed it, everything that person sees in the web UI: every transcript, note and calendar. Nothing can be changed. Tools:
 
 | Tool | |
 |---|---|
 | `search_transcripts` | Newest first; filters: words (as in the UI search), type, participant (name, email or company), from/to dates. Returns metadata, the linked event, and a snippet around the match. |
 | `get_transcript` | Metadata and text by id; long texts in pages (`offset`, `max_bytes`, `next_offset`). |
 | `list_transcript_types` | Types with counts. |
+| `search_notes` | Notes newest first; filters: words, author, from/to dates. Notes still being saved are included (`pending`, no title yet). |
+| `get_note` | A note's title, author, dates and text. |
 | `list_calendars` | Every calendar, with owner; `yours` marks the caller's. |
 | `list_events` | Occurrences in a range (default: today + 7 days, at most a year), optionally by calendar or words; organizer, guests, location, description (cut at 2000 bytes), and the transcripts recorded in each. |
 
@@ -244,8 +268,8 @@ Those emails are the link to Folk (people are matched by email); no Folk ids are
 |---|---|---|
 | `BRAIN_REPO_URL` | required | e.g. `git@github.com:org/brain.git` |
 | `BRAIN_API_TOKENS` | | Optional fixed tokens, `antonio:<token>,maxim:<token>`; at least 24 chars (`openssl rand -hex 32`). The name goes into `uploaded_by` and the commit's `Uploaded-By:` trailer. People can also create their own tokens in the UI. |
-| `BRAIN_STATE_DB` | `./data/state.db` | SQLite: users, sessions, API tokens, OAuth apps and grants, connections, run history |
-| `BRAIN_MASTER_KEY_FILE` | | 32-byte key (raw or base64) that seals connector credentials. Without it, the systemd credential `ktx-master-key` is used; without either, connectors are off. |
+| `BRAIN_STATE_DB` | `./data/state.db` | SQLite: users, sessions, API tokens, OAuth apps and grants, connections, run history, settings (sealed AI key), notes waiting to be committed |
+| `BRAIN_MASTER_KEY_FILE` | | 32-byte key (raw or base64) that seals connector credentials and the AI key. Without it, the systemd credential `ktx-master-key` is used; without either, connectors and AI titles are off. |
 | `BRAIN_OIDC_ISSUER` | | Identity provider URL, e.g. `https://id.internal.melzi.dev`. Turns on sign-in. |
 | `BRAIN_OIDC_CLIENT_ID`, `BRAIN_OIDC_CLIENT_SECRET` (or `_FILE`) | | ktx's client at the identity provider |
 | `BRAIN_PUBLIC_URL` | | ktx's own URL; the callback is `<url>/auth/callback`. Also the OAuth issuer, and the MCP resource is `<url>/mcp`. |

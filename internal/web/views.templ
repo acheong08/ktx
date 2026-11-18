@@ -21,6 +21,9 @@ templ layout(title string, c chrome) {
 				<a class="brand" href="/">brain</a>
 				<nav>
 					<a href="/" class={ templ.KV("active", c.Nav == "transcripts") }>Transcripts</a>
+					if c.Notes {
+						<a href="/notes" class={ templ.KV("active", c.Nav == "notes") }>Notes</a>
+					}
 					if c.HasSettings() {
 						<a href="/settings" class={ templ.KV("active", c.InSettings()) }>Settings</a>
 					}
@@ -48,6 +51,9 @@ templ layout(title string, c chrome) {
 						}
 						if c.Tokens {
 							<a href="/settings/tokens" class={ "tab", templ.KV("active", c.Nav == "tokens") }>Tokens</a>
+						}
+						if c.AI {
+							<a href="/settings/ai" class={ "tab", templ.KV("active", c.Nav == "ai") }>AI</a>
 						}
 					</nav>
 				}

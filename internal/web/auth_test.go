@@ -25,10 +25,12 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 
+	"github.com/acheong08/ktx/internal/ai"
 	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
 	"github.com/acheong08/ktx/internal/gitrepo"
 	"github.com/acheong08/ktx/internal/mcpserver"
+	"github.com/acheong08/ktx/internal/notes"
 	"github.com/acheong08/ktx/internal/oauth"
 	"github.com/acheong08/ktx/internal/secrets"
 	"github.com/acheong08/ktx/internal/state"
@@ -139,12 +141,16 @@ func (stub) Sync(_ context.Context, _ connectors.Config, cursor string, _ func(s
 }
 
 type authEnv struct {
-	ts  *httptest.Server
-	idp *fakeIDP
-	db  *state.DB
-	st  *store.Store
-	cal *calendar.Service
+	ts    *httptest.Server
+	idp   *fakeIDP
+	db    *state.DB
+	st    *store.Store
+	cal   *calendar.Service
+	notes *notes.Service
 }
+
+// llmDelay slows the fake model, to watch titles arrive in a browser.
+var llmDelay time.Duration
 
 func setupAuth(t *testing.T) *authEnv {
 	t.Helper()
@@ -179,13 +185,25 @@ func setupAuth(t *testing.T) *authEnv {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	t.Cleanup(ts.Close)
 	auth := NewAuth(OIDCConfig{Issuer: idp.URL, ClientID: "ktx", ClientSecret: "client-secret", PublicURL: ts.URL, AdminGroup: "ktx-admins"}, db, quiet)
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(llmDelay)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"c1","object":"chat.completion","created":0,"model":"nw-flash","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Acme pricing follow-up"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	t.Cleanup(llm.Close)
+	aiSettings := ai.NewSettings(db, box)
+	aiSettings.SetBaseURL(llm.URL + "/v1/")
+	nts := notes.New(repo, db, aiSettings, quiet)
+	nts.SetTiming(50*time.Millisecond, time.Millisecond)
+	nts.Start(ctx)
+
 	mux := http.NewServeMux()
 	prov := oauth.New(db, ts.URL, quiet)
 	prov.Register(mux)
-	mcpserver.New(st, cal, prov, "test", quiet).Register(mux)
-	mux.Handle("/", New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr, Calendar: cal, OAuth: prov}).Handler())
+	mcpserver.New(st, cal, nts, prov, "test", quiet).Register(mux)
+	mux.Handle("/", New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr, Calendar: cal, OAuth: prov, Notes: nts, AI: aiSettings}).Handler())
 	handler = mux
-	return &authEnv{ts: ts, idp: idp, db: db, st: st, cal: cal}
+	return &authEnv{ts: ts, idp: idp, db: db, st: st, cal: cal, notes: nts}
 }
 
 func (e *authEnv) browser() *env {

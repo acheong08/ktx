@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -191,7 +192,7 @@ func TestMCPOverOAuth(t *testing.T) {
 			t.Errorf("%s has no intent argument: %s", tl.Name, mustJSON(tl.InputSchema))
 		}
 	}
-	if strings.Join(names, ",") != "get_transcript,list_calendars,list_events,list_transcript_types,search_transcripts" {
+	if strings.Join(names, ",") != "get_note,get_transcript,list_calendars,list_events,list_transcript_types,search_notes,search_transcripts" {
 		t.Fatalf("tools: %v", names)
 	}
 
@@ -270,6 +271,26 @@ func TestMCPOverOAuth(t *testing.T) {
 	}
 	if _, msg := call("list_events", map[string]any{"intent": "test", "calendars": []string{"nobody/x"}}); !strings.Contains(msg, "antonio/personal") {
 		t.Fatalf("unknown calendar: %q", msg)
+	}
+
+	// Notes (no AI key here, so the title is the first line).
+	nid, err := e.notes.Submit("Runway is 14 months\nHire in Q1.", "antonio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		if n, _ := e.notes.Get(nid); !n.Pending {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	out, msg = call("search_notes", map[string]any{"intent": "test", "query": "hire"})
+	if msg != "" || out["total"] != 1.0 || out["notes"].([]any)[0].(map[string]any)["title"] != "Runway is 14 months" {
+		t.Fatalf("search_notes: %v %s", out, msg)
+	}
+	out, _ = call("get_note", map[string]any{"intent": "test", "id": nid})
+	if out["text"] != "Runway is 14 months\nHire in Q1.\n" || out["author"] != "antonio" {
+		t.Fatalf("get_note: %v", out)
 	}
 
 	// Refresh: new tokens work, old ones don't.

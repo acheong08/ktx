@@ -1,6 +1,6 @@
 // Package state is ktx's operational database (SQLite): users, sessions,
 // API tokens, OAuth apps and grants, connector connections and their run
-// history.
+// history, workspace settings, and notes still being saved.
 //
 // Knowledge lives in the git repository; this database holds only what is
 // needed to run the service. Losing it costs re-entering credentials and
@@ -132,6 +132,24 @@ var migrations = []string{
 		last_used_at       TEXT
 	);
 	CREATE INDEX oauth_grants_by_user ON oauth_grants(user_id);`,
+	// Workspace settings (e.g. the AI provider), with an optional sealed
+	// secret; and notes waiting for a title and their commit.
+	`CREATE TABLE settings (
+		key         TEXT PRIMARY KEY,
+		value       TEXT NOT NULL DEFAULT '',   -- JSON, not secret
+		secret      BLOB,                       -- sealed (see package secrets)
+		secret_hint TEXT NOT NULL DEFAULT '',
+		updated_at  TEXT NOT NULL,
+		updated_by  TEXT NOT NULL DEFAULT ''
+	);
+	CREATE TABLE pending_notes (
+		id         TEXT PRIMARY KEY,
+		author     TEXT NOT NULL,
+		body       TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		attempts   INTEGER NOT NULL DEFAULT 0,
+		error      TEXT NOT NULL DEFAULT ''
+	);`,
 }
 
 func (s *DB) migrate() error {

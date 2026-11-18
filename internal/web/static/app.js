@@ -56,3 +56,10 @@ document.addEventListener("change", (e) => {
   const one = e.target.closest("[data-group]");
   if (one) updateSelection(one.dataset.group);
 });
+
+// Ctrl/Cmd + Enter in a textarea with data-ctrl-enter-submits submits its form.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || !e.target.matches("[data-ctrl-enter-submits]")) return;
+  e.preventDefault();
+  e.target.form?.requestSubmit();
+});

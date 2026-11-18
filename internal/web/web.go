@@ -34,8 +34,10 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/renderer/html"
 
+	"github.com/acheong08/ktx/internal/ai"
 	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
+	"github.com/acheong08/ktx/internal/notes"
 	"github.com/acheong08/ktx/internal/oauth"
 	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
@@ -53,6 +55,8 @@ type UI struct {
 	conns  *connectors.Manager // nil: no connections page
 	cal    *calendar.Service   // nil: no calendar
 	oauth  *oauth.Provider     // nil: no MCP apps
+	notes  *notes.Service      // nil: no notes
+	ai     *ai.Settings        // nil: no AI settings
 	types  []string            // suggested types, merged with the folders that exist
 	log    *slog.Logger
 	assets assets
@@ -71,12 +75,14 @@ type Options struct {
 	Connectors *connectors.Manager
 	Calendar   *calendar.Service
 	OAuth      *oauth.Provider // apps (MCP clients) people can allow; needs Auth
+	Notes      *notes.Service
+	AI         *ai.Settings // the AI provider; editable by admins, so needs Auth
 }
 
 // New builds the UI.
 func New(o Options) *UI {
 	return &UI{
-		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, cal: o.Calendar, oauth: o.OAuth, types: o.Types, log: o.Log,
+		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, cal: o.Calendar, oauth: o.OAuth, notes: o.Notes, ai: o.AI, types: o.Types, log: o.Log,
 		assets: assets{
 			CSS:  assetURL("style.css"),
 			JS:   assetURL("app.js"),
@@ -140,6 +146,19 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("POST /settings/tokens", u.page(u.createToken))
 		mux.HandleFunc("POST /settings/tokens/{id}/delete", u.page(u.deleteToken))
 	}
+	if u.notes != nil {
+		mux.HandleFunc("GET /notes", u.page(u.notesPage))
+		mux.HandleFunc("POST /notes", u.page(u.createNote))
+		mux.HandleFunc("GET /notes/{id}", u.page(u.noteDetail))
+		mux.HandleFunc("GET /notes/{id}/title", u.page(u.noteTitle))
+		mux.HandleFunc("GET /notes/{id}/edit", u.page(u.editNote))
+		mux.HandleFunc("POST /notes/{id}", u.page(u.saveNote))
+		mux.HandleFunc("POST /notes/{id}/delete", u.page(u.deleteNote))
+	}
+	if u.auth != nil && u.ai != nil {
+		mux.HandleFunc("GET /settings/ai", u.page(u.aiPage))
+		mux.HandleFunc("POST /settings/ai", u.page(u.saveAI))
+	}
 	if u.auth != nil && u.db != nil && u.oauth != nil {
 		mux.HandleFunc("GET /oauth/authorize", u.page(u.authorize))
 		mux.HandleFunc("POST /oauth/authorize", u.page(u.authorizeDecision))
@@ -166,6 +185,8 @@ func (u *UI) Handler() http.Handler {
 			http.Redirect(w, r, "/settings/calendar", http.StatusSeeOther)
 		case c.Tokens:
 			http.Redirect(w, r, "/settings/tokens", http.StatusSeeOther)
+		case c.AI:
+			http.Redirect(w, r, "/settings/ai", http.StatusSeeOther)
 		default:
 			http.NotFound(w, r)
 		}
@@ -235,24 +256,27 @@ type chrome struct {
 	Connections bool
 	Tokens      bool
 	Calendar    bool
+	AI          bool
+	Notes       bool
 	Nav         string // active section
 }
 
 // HasSettings reports whether any settings page is available.
-func (c chrome) HasSettings() bool { return c.Connections || c.Calendar || c.Tokens }
+func (c chrome) HasSettings() bool { return c.Connections || c.Calendar || c.Tokens || c.AI }
 
 // InSettings reports whether the page is one of the settings pages.
 func (c chrome) InSettings() bool {
-	return c.Nav == "connections" || c.Nav == "calendar" || c.Nav == "tokens"
+	return c.Nav == "connections" || c.Nav == "calendar" || c.Nav == "tokens" || c.Nav == "ai"
 }
 
 func (u *UI) chrome(r *http.Request, nav string) chrome {
-	c := chrome{Assets: u.assets, SignIn: u.auth != nil, Nav: nav}
+	c := chrome{Assets: u.assets, SignIn: u.auth != nil, Nav: nav, Notes: u.notes != nil}
 	if user, ok := currentUser(r); ok {
 		c.User, c.IsAdmin = user.Display(), user.IsAdmin
 		c.Connections = u.conns != nil
 		c.Tokens = u.db != nil
 		c.Calendar = u.cal != nil
+		c.AI = u.ai != nil
 	}
 	return c
 }

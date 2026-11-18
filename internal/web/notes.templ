@@ -1,0 +1,161 @@
+package web
+
+import "github.com/acheong08/ktx/internal/notes"
+
+templ notesListPage(v notesView) {
+	@layout("Notes", v.Chrome) {
+		<h1>Notes</h1>
+		<form method="post" action="/notes" class="scratchpad">
+			<label for="note-body" class="visually-hidden">New note</label>
+			<textarea id="note-body" name="body" rows="8" placeholder="Write anything… (Markdown)" required autofocus data-ctrl-enter-submits>{ v.Draft }</textarea>
+			<div class="scratchpad-actions">
+				<button type="submit" class="primary">Save note</button>
+				<span class="help">
+					Ctrl/⌘ + Enter saves.
+					if v.AIOff {
+						The title is the first line (no AI key set).
+					} else {
+						A title is written for you.
+					}
+				</span>
+			</div>
+		</form>
+		<form id="note-filters" class="filters" action="/notes" method="get" hx-get="/notes" hx-target="#note-results" hx-push-url="true" hx-trigger="input delay:300ms, submit">
+			<input type="search" name="q" value={ v.Q } placeholder="Search notes…" aria-label="Search notes" autocomplete="off"/>
+		</form>
+		<div id="note-results">
+			@noteResults(v)
+		</div>
+	}
+}
+
+templ noteResults(v notesView) {
+	@flashBox(v.Flash)
+	if len(v.Notes) == 0 {
+		<p class="empty">
+			if v.Q != "" {
+				No note matches “{ v.Q }”.
+			} else {
+				No notes yet.
+			}
+		</p>
+	} else {
+		<table class="list notes">
+			<thead>
+				<tr><th>Note</th><th>Written</th><th>By</th></tr>
+			</thead>
+			<tbody>
+				for _, n := range v.Notes {
+					<tr>
+						<td data-label="Note">
+							<a href={ templ.URL("/notes/" + n.ID) }>
+								@noteTitle(n, false)
+							</a>
+						</td>
+						<td data-label="Written" class="date">{ fmtNoteDate(n.Created) }</td>
+						<td data-label="By">{ n.Author }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+}
+
+// noteTitle polls until a pending note has its title.
+templ noteTitle(n notes.Note, reload bool) {
+	if n.Pending {
+		<span class="pending" hx-get={ noteTitleURL(n.ID, reload) } hx-trigger="every 2s" hx-swap="outerHTML">Generating title…</span>
+	} else {
+		<span>{ n.Title }</span>
+	}
+}
+
+templ noteDetailPage(v noteView) {
+	@layout(noteLabel(v.Note), v.Chrome) {
+		<p class="back"><a href="/notes">← Notes</a></p>
+		<article class="note">
+			<h1>
+				@noteTitle(v.Note, true)
+			</h1>
+			@flashBox(v.Flash)
+			<p class="sub">
+				{ fmtNoteDate(v.Note.Created) } · { v.Note.Author }
+				if v.Note.EditedAt != "" {
+					· edited by { v.Note.EditedBy }
+				}
+				if v.Note.Path != "" {
+					· <code>{ v.Note.Path }</code>
+				}
+			</p>
+			if !v.Note.Pending {
+				<p class="note-actions"><a class="button" href={ templ.URL("/notes/" + v.Note.ID + "/edit") }>Edit</a></p>
+			}
+			<div class="body">
+				@templ.Raw(v.BodyHTML)
+			</div>
+			if !v.Note.Pending {
+				<form method="post" class="danger" action={ templ.URL("/notes/" + v.Note.ID + "/delete") }>
+					<label class="check"><input type="checkbox" name="confirm" required/> Delete this note. It stays in git history.</label>
+					<button type="submit">Delete</button>
+				</form>
+			}
+		</article>
+	}
+}
+
+templ noteForm(v noteFormView) {
+	@layout("Edit note", v.Chrome) {
+		<p class="back"><a href={ templ.URL("/notes/" + v.ID) }>← Back without saving</a></p>
+		<h1>Edit note</h1>
+		if v.Error != "" {
+			@flashBox(flash{"error", v.Error})
+		}
+		<form method="post" class="settings wide" action={ templ.URL("/notes/" + v.ID) }>
+			<label for="title">Title</label>
+			<input id="title" name="title" type="text" value={ v.Title } required/>
+			<label for="body">Note (Markdown)</label>
+			<textarea id="body" name="body" rows="20" required data-ctrl-enter-submits>{ v.Body }</textarea>
+			<button type="submit" class="primary">Save</button>
+		</form>
+	}
+}
+
+templ aiSettingsPage(v aiView) {
+	@layout("AI", v.Chrome) {
+		<h1>AI</h1>
+		<p class="lead">
+			ktx uses <a href="https://neuralwatt.com">Neuralwatt</a> (<code>{ v.BaseURL }</code>) to write titles for notes.
+			One key for the whole workspace; it's stored encrypted and never shown again.
+		</p>
+		@flashBox(v.Flash)
+		if v.Status.Configured {
+			<p>
+				Using <code>{ v.Status.Model }</code> with key <code>{ v.Status.KeyHint }</code>,
+				set by { v.Status.UpdatedBy } { ago(v.Status.UpdatedAt) }.
+			</p>
+		} else {
+			<p class="muted">No key set: notes get their first line as title.</p>
+		}
+		if !v.CanStore {
+			@flashBox(flash{"warn", "There's no master key on the server (BRAIN_MASTER_KEY_FILE), so an API key can't be stored."})
+		} else if !v.CanEdit {
+			<p class="muted">Only admins can change this.</p>
+		} else {
+			<form method="post" action="/settings/ai" class="settings">
+				<label for="key">API key</label>
+				<input id="key" name="key" type="password" autocomplete="off" placeholder={ keyPlaceholder(v) } required?={ !v.Status.Configured }/>
+				<label for="model">Model</label>
+				<input id="model" name="model" type="text" value={ v.Model } autocomplete="off" spellcheck="false"/>
+				<p class="help"><code>nw-flash</code> follows Neuralwatt's current fast model. Saving checks the key and model with a test title.</p>
+				<button type="submit" class="primary">Save</button>
+			</form>
+			if v.Status.Configured {
+				<form method="post" action="/settings/ai" class="danger">
+					<input type="hidden" name="remove" value="1"/>
+					<span>Remove the key; titles then come from the first line.</span>
+					<button type="submit">Remove</button>
+				</form>
+			}
+		}
+	}
+}
