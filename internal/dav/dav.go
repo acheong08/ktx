@@ -186,7 +186,7 @@ func toDAV(user string, c calendar.Calendar) caldav.Calendar {
 	}
 	return caldav.Calendar{
 		Path: calPath(user, c), Name: name, Description: c.Description, Color: c.Color,
-		MaxResourceSize: maxEventBytes, SupportedComponentSet: []string{ical.CompEvent},
+		MaxResourceSize: maxEventBytes, SupportedComponentSet: []string{ical.CompEvent, ical.CompToDo},
 		ReadOnly: c.Owner != user,
 	}
 }
@@ -314,7 +314,7 @@ func (b *backend) QueryCalendarObjects(ctx context.Context, p string, q *caldav.
 	}
 	var out []caldav.CalendarObject
 	for i := range all {
-		ok, err := caldav.Match(q.CompFilter, &all[i])
+		ok, err := matches(q.CompFilter, &all[i])
 		if ok || err != nil { // an event we can't evaluate is returned rather than hidden
 			out = append(out, all[i])
 		}

@@ -235,12 +235,14 @@ go tool templ generate -path internal/web   # after changing views.templ; commit
 
 ## Calendar
 
-Calendars are stored in the brain repo, one `.ics` file per event (a repeating event and its changed occurrences share a file):
+Calendars are stored in the brain repo, one `.ics` file per event or task (a repeating event and its changed occurrences share a file):
 
 ```
 calendar/<owner>/<calendar>/calendar.json      name, colour, description
-calendar/<owner>/<calendar>/<uid>.ics          one event
+calendar/<owner>/<calendar>/<uid>.ics          one event (VEVENT) or task (VTODO)
 ```
+
+**Tasks:** every calendar holds tasks (to-dos) as well as events, so it shows up in task apps (Apple Reminders, Thunderbird Tasks) too. A file holds either an event or a task, never both. Tasks aren't matched to transcripts or shown in the UI's event list; **Settings → Calendar** counts them per calendar. Tags are the standard `CATEGORIES`.
 
 Every change, from a calendar app or the UI, is one commit (`Calendar: add "Acme intro" (antonio/personal)`, with `Changed-By:`).
 
@@ -252,7 +254,7 @@ Every change, from a calendar app or the UI, is one commit (`Calendar: add "Acme
 
 The first sign-in creates a `personal` calendar. Rename a calendar on **Settings → Calendar** or in your calendar app (name and colour); its id, and so its path, never change. Clients can create more (MKCALENDAR or extended MKCOL), or use **Settings → Calendar**.
 
-**Seeding from an export:** **Settings → Calendar** → Import an .ics file (Google, Apple and Outlook exports, up to 50 MB). Events are upserted by UID; nothing is deleted, so importing again is safe. The page reports what was added, updated, unchanged and skipped (tasks, events without a UID), and lists the last 7 and next 14 days with the transcripts linked to each event.
+**Seeding from an export:** **Settings → Calendar** → Import an .ics file (Google, Apple and Outlook exports, up to 50 MB). Events are upserted by UID; nothing is deleted, so importing again is safe. Tasks (VTODO) are imported the same way. The page reports what was added, updated, unchanged and skipped (e.g. entries without a UID), and lists the last 7 and next 14 days with the transcripts linked to each event.
 
 **CalDAV support:** discovery (`/.well-known/caldav`, principal, home set), PROPFIND, calendar-query with time ranges (repeating events expanded), calendar-multiget, GET/PUT/DELETE with ETags and `If-Match`/`If-None-Match`, and `getctag` for change detection. Not supported: sync-collection (clients fall back to ETags), scheduling (invitations aren't emailed), free/busy, tasks.
 

@@ -287,33 +287,36 @@ func DeleteObject(root string, c Calendar, name, ifMatch string) ([]string, erro
 	return []string{o.Path}, nil
 }
 
-// checkObject accepts one VCALENDAR whose components are events sharing one
-// UID (a series and its overridden occurrences), plus time zones.
+// checkObject accepts one VCALENDAR whose components are events or to-dos
+// (not both) sharing one UID (a series and its overridden occurrences),
+// plus time zones.
 func checkObject(data *ical.Calendar) (string, error) {
 	if data == nil || data.Component == nil {
 		return "", fmt.Errorf("%w: empty calendar", ErrInvalid)
 	}
-	uid := ""
-	events := 0
+	uid, kind := "", ""
 	for _, child := range data.Children {
 		switch child.Name {
 		case ical.CompTimezone:
-		case ical.CompEvent:
-			events++
+		case ical.CompEvent, ical.CompToDo:
+			if kind != "" && kind != child.Name {
+				return "", fmt.Errorf("%w: one file may hold events or to-dos, not both", ErrInvalid)
+			}
+			kind = child.Name
 			u, _ := child.Props.Text(ical.PropUID)
 			if u == "" {
-				return "", fmt.Errorf("%w: event without a UID", ErrInvalid)
+				return "", fmt.Errorf("%w: %s without a UID", ErrInvalid, child.Name)
 			}
 			if uid != "" && u != uid {
-				return "", fmt.Errorf("%w: one file may hold only one event UID", ErrInvalid)
+				return "", fmt.Errorf("%w: one file may hold only one UID", ErrInvalid)
 			}
 			uid = u
 		default:
-			return "", fmt.Errorf("%w: only events are stored here, not %s", ErrInvalid, child.Name)
+			return "", fmt.Errorf("%w: only events and to-dos are stored here, not %s", ErrInvalid, child.Name)
 		}
 	}
-	if events == 0 {
-		return "", fmt.Errorf("%w: no event in the data", ErrInvalid)
+	if kind == "" {
+		return "", fmt.Errorf("%w: no event or to-do in the data", ErrInvalid)
 	}
 	return uid, nil
 }
@@ -332,12 +335,25 @@ func findUID(root string, c Calendar, uid string) (string, error) {
 	return "", nil
 }
 
-// fileUID returns the UID of an event file (cached by content).
+// fileUID returns the UID of an event or to-do file (cached by content).
 func fileUID(o Object) string {
 	if ev, err := parsed(o); err == nil && len(ev) > 0 {
 		return ev[0].UID
 	}
+	if cal, err := o.Decode(); err == nil {
+		for _, c := range cal.Children {
+			if c.Name == ical.CompToDo {
+				uid, _ := c.Props.Text(ical.PropUID)
+				return uid
+			}
+		}
+	}
 	return ""
+}
+
+// IsToDo reports whether an object holds a to-do rather than an event.
+func (o Object) IsToDo() bool {
+	return bytes.Contains(o.Raw, []byte("BEGIN:VTODO"))
 }
 
 // --- file access with a small cache --------------------------------------------

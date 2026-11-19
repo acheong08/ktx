@@ -128,11 +128,11 @@ func TestImportAndOccurrences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Added != 4 || len(rep.Skipped) != 1 || !strings.Contains(rep.Skipped[0], "VTODO") || !git.Pushed {
+	if rep.Added != 5 || len(rep.Skipped) != 0 || !git.Pushed {
 		t.Fatalf("report: %+v %+v", rep, git)
 	}
 	msg := gitOut(t, "--git-dir", e.remote, "log", "-1", "--format=%s", "main")
-	if msg != "Calendar: import into antonio/work: 4 added, 0 updated" {
+	if msg != "Calendar: import into antonio/work: 5 added, 0 updated" {
 		t.Errorf("subject = %q", msg)
 	}
 	// The series and its moved occurrence share one file named after the UID.
@@ -145,10 +145,15 @@ func TestImportAndOccurrences(t *testing.T) {
 		t.Errorf("outlook file:\n%s", f)
 	}
 
+	// The to-do has its own file, and isn't an occurrence.
+	if f := gitOut(t, "--git-dir", e.remote, "show", "main:calendar/antonio/work/task-1.ics"); !strings.Contains(f, "BEGIN:VTODO") {
+		t.Errorf("to-do file:\n%s", f)
+	}
+
 	// Importing again changes nothing and commits nothing.
 	n := gitOut(t, "--git-dir", e.remote, "rev-list", "--count", "main")
 	rep, _, err = e.svc.Import(ctx, cal, strings.NewReader(export), "antonio")
-	if err != nil || rep.Unchanged != 4 || rep.Added+rep.Updated != 0 {
+	if err != nil || rep.Unchanged != 5 || rep.Added+rep.Updated != 0 {
 		t.Fatalf("re-import: %+v %v", rep, err)
 	}
 	if gitOut(t, "--git-dir", e.remote, "rev-list", "--count", "main") != n {

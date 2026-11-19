@@ -26,6 +26,7 @@ type calRow struct {
 	Cal    calendar.Calendar
 	Mine   bool
 	Events int
+	Tasks  int // to-dos (VTODO), shown in calendar apps' task lists
 }
 
 type occRow struct {
@@ -68,7 +69,15 @@ func (u *UI) calendarView(r *http.Request) (calendarView, error) {
 		if err != nil {
 			return v, err
 		}
-		v.Calendars = append(v.Calendars, calRow{Cal: c, Mine: c.Owner == owner, Events: len(objs)})
+		row := calRow{Cal: c, Mine: c.Owner == owner}
+		for _, o := range objs {
+			if o.IsToDo() {
+				row.Tasks++
+			} else {
+				row.Events++
+			}
+		}
+		v.Calendars = append(v.Calendars, row)
 		if c.Owner == owner {
 			v.Mine = append(v.Mine, c)
 		}

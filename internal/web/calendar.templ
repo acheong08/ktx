@@ -44,7 +44,7 @@ templ calendarPage(v calendarView) {
 		<h2>Calendars</h2>
 		<table class="list">
 			<thead>
-				<tr><th>Calendar</th><th>Owner</th><th>Events</th><th>CalDAV path</th></tr>
+				<tr><th>Calendar</th><th>Owner</th><th>Events</th><th>Tasks</th><th>CalDAV path</th></tr>
 			</thead>
 			<tbody>
 				for _, c := range v.Calendars {
@@ -66,6 +66,7 @@ templ calendarPage(v calendarView) {
 							}
 						</td>
 						<td data-label="Events">{ strconv.Itoa(c.Events) }</td>
+						<td data-label="Tasks">{ strconv.Itoa(c.Tasks) }</td>
 						<td data-label="CalDAV path"><code>{ davPath(v.Owner, c.Cal.Owner, c.Cal.ID) }</code></td>
 					</tr>
 				}
@@ -74,7 +75,7 @@ templ calendarPage(v calendarView) {
 		<div class="columns">
 			<form method="post" action="/settings/calendar/import" enctype="multipart/form-data" class="settings">
 				<h3>Import an .ics file</h3>
-				<p class="muted">An export from Google Calendar, Apple Calendar or Outlook. Events are added or updated by UID; nothing is deleted, so importing again is safe.</p>
+				<p class="muted">An export from Google Calendar, Apple Calendar, Outlook or a task app. Events and tasks (to-dos) are added or updated by UID; nothing is deleted, so importing again is safe.</p>
 				<label for="import-cal">Into</label>
 				<select id="import-cal" name="calendar">
 					for _, c := range v.Mine {

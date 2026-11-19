@@ -225,7 +225,7 @@ func (s *Service) Import(ctx context.Context, c Calendar, r io.Reader, user stri
 
 func summaryOf(cal *ical.Calendar) string {
 	for _, c := range cal.Children {
-		if c.Name == ical.CompEvent {
+		if c.Name == ical.CompEvent || c.Name == ical.CompToDo {
 			if s, _ := c.Props.Text(ical.PropSummary); s != "" {
 				return s
 			}

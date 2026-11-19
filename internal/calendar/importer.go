@@ -17,8 +17,8 @@ const prodID = "-//ktx//calendar//EN"
 
 // normalize fills in what the encoder requires and some exports leave out,
 // without making the result depend on the time of the write: PRODID and
-// VERSION on the calendar, DTSTAMP on each event (from LAST-MODIFIED,
-// CREATED or DTSTART).
+// VERSION on the calendar, DTSTAMP on each event or to-do (from
+// LAST-MODIFIED, CREATED, DTSTART or DUE).
 func normalize(cal *ical.Calendar) {
 	if cal.Props.Get(ical.PropProductID) == nil {
 		cal.Props.SetText(ical.PropProductID, prodID)
@@ -27,10 +27,10 @@ func normalize(cal *ical.Calendar) {
 		cal.Props.SetText(ical.PropVersion, "2.0")
 	}
 	for _, c := range cal.Children {
-		if c.Name != ical.CompEvent || c.Props.Get(ical.PropDateTimeStamp) != nil {
+		if (c.Name != ical.CompEvent && c.Name != ical.CompToDo) || c.Props.Get(ical.PropDateTimeStamp) != nil {
 			continue
 		}
-		for _, from := range []string{ical.PropLastModified, ical.PropCreated, ical.PropDateTimeStart} {
+		for _, from := range []string{ical.PropLastModified, ical.PropCreated, ical.PropDateTimeStart, ical.PropDue} {
 			if p := c.Props.Get(from); p != nil {
 				if t, _, err := propTime(p); err == nil {
 					c.Props.SetDateTime(ical.PropDateTimeStamp, t.UTC())
@@ -48,10 +48,10 @@ type ImportReport struct {
 	Warnings                  []string // imported, but something to know
 }
 
-// Import upserts every event in an .ics stream into c: events are grouped
-// by UID (a series and its changed occurrences together), each UID becomes
-// one file, and files whose content is unchanged are left alone. Nothing is
-// deleted. It returns the paths to commit.
+// Import upserts every event and to-do in an .ics stream into c: they are
+// grouped by UID (a series and its changed occurrences together), each UID
+// becomes one file, and files whose content is unchanged are left alone.
+// Nothing is deleted. It returns the paths to commit.
 func Import(root string, c Calendar, r io.Reader) (ImportReport, []string, error) {
 	var rep ImportReport
 	if _, err := GetCalendar(root, c.Owner, c.ID); err != nil {
@@ -79,7 +79,7 @@ func Import(root string, c Calendar, r io.Reader) (ImportReport, []string, error
 				if id, _ := child.Props.Text(ical.PropTimezoneID); id != "" {
 					zones[id] = child
 				}
-			case ical.CompEvent:
+			case ical.CompEvent, ical.CompToDo:
 				uid, _ := child.Props.Text(ical.PropUID)
 				if uid == "" {
 					summary, _ := child.Props.Text(ical.PropSummary)
@@ -91,7 +91,7 @@ func Import(root string, c Calendar, r io.Reader) (ImportReport, []string, error
 				}
 				byUID[uid] = append(byUID[uid], child)
 			default:
-				rep.Skipped = append(rep.Skipped, "a "+child.Name+" (only events are imported)")
+				rep.Skipped = append(rep.Skipped, "a "+child.Name+" (only events and to-dos are imported)")
 			}
 		}
 	}
@@ -140,6 +140,10 @@ func Import(root string, c Calendar, r io.Reader) (ImportReport, []string, error
 		}
 		var buf bytes.Buffer
 		if err := ical.NewEncoder(&buf).Encode(cal); err != nil {
+			rep.Skipped = append(rep.Skipped, label+": "+err.Error())
+			continue
+		}
+		if _, err := checkObject(cal); err != nil {
 			rep.Skipped = append(rep.Skipped, label+": "+err.Error())
 			continue
 		}

@@ -9,7 +9,7 @@ One Go service, **brain-server**, owning a clone of the data repo `git@github.co
 ```
 transcripts/<type>/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md   Markdown + YAML front matter; folder = type ("unsorted" = none)
 calendar/<owner>/<calendar>/calendar.json             name, colour, description
-calendar/<owner>/<calendar>/<uid>.ics                 one event (series + overrides + VTIMEZONEs)
+calendar/<owner>/<calendar>/<uid>.ics                 one event (series + overrides + VTIMEZONEs) or one VTODO (task)
 notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md              scratchpad notes: title, created, author, labels, via (+ edited_*)
 notes/labels.yaml                                     note labels: name + description (meaning); edited in Settings → Labels
 .ktx/deleted                                          ids deleted in the UI, so syncs don't bring them back
@@ -29,6 +29,7 @@ Key behaviours:
 - A transcript edited in the UI gets `edited_at`/`edited_by`; connector syncs then skip it.
 - **Calendar linking:** every transcript write, every calendar change, and server start re-match transcripts to events and write `calendar_event:` plus `participants` entries with `from: calendar`. Order: Granola `calendar_event_id`; else events within 15 min of the start or that the call started during; ranked by has-guests, then participant overlap (email among guests or full name in title), then nearest start, then title similarity; a full tie is no match. `match: manual|none` is set by people and never recomputed. Calendar participants are hidden from the edit form and re-added on save.
 - **Time zone:** one workspace zone (Settings → General, `settings` key `timezone`, default America/Los_Angeles) via `calendar.DefaultZone()`/`SetDefaultZone` (atomic; clears the event parse cache). All UI times use it; transcripts with their own zone also show it.
+- **Tasks (VTODO)** live in the same calendars (supported-calendar-component-set VEVENT+VTODO); not linked, not in the UI event list. go-webdav's `Match` rejects every VTODO with a time range, so `internal/dav/todo.go` strips those ranges and applies RFC 4791 §9.9 itself. Antonio's Vikunja "Antonio - Personal" projects were imported into `antonio/personal` as `vikunja-<id>` tasks, sub-project name in CATEGORIES.
 - Everyone sees every calendar; only the owner writes (others get read-only over CalDAV as `<owner>~<id>`). The first CalDAV sign-in or Settings → Calendar visit creates `<user>/personal`.
 
 ## Code map

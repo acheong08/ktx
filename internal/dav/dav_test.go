@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -340,5 +341,89 @@ func TestPropPatch(t *testing.T) {
 	bad := strings.Replace(body, "#FF2968FF", "red", 1)
 	if _, out := send("antonio", e.antonioTok, "/dav/antonio/calendars/work/", bad); !strings.Contains(out, "409") {
 		t.Errorf("bad colour: %s", out)
+	}
+}
+
+func todo(uid, summary string, props map[string]string) *ical.Calendar {
+	cal := ical.NewCalendar()
+	cal.Props.SetText(ical.PropProductID, "-//test//EN")
+	cal.Props.SetText(ical.PropVersion, "2.0")
+	c := ical.NewComponent(ical.CompToDo)
+	c.Props.SetText(ical.PropUID, uid)
+	c.Props.SetText(ical.PropSummary, summary)
+	c.Props.SetDateTime(ical.PropDateTimeStamp, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	for k, v := range props {
+		c.Props.Set(&ical.Prop{Name: k, Value: v, Params: ical.Params{}})
+	}
+	cal.Children = append(cal.Children, c)
+	return cal
+}
+
+func TestToDos(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c := e.client(t, "antonio", e.antonioTok)
+	home := Prefix + "/antonio/calendars/work/"
+
+	cals, err := c.FindCalendars(ctx, Prefix+"/antonio/calendars/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cals[0].SupportedComponentSet, ","); got != "VEVENT,VTODO" {
+		t.Fatalf("component set = %q", got)
+	}
+
+	for uid, props := range map[string]map[string]string{
+		"due-dec":   {ical.PropDue: "20261210T170000Z"},
+		"done-nov":  {ical.PropStatus: "COMPLETED", ical.PropCompleted: "20261105T120000Z", ical.PropCreated: "20261101T120000Z"},
+		"undated":   {},
+		"start-jan": {ical.PropDateTimeStart: "20270105T090000Z"},
+	} {
+		if _, err := c.PutCalendarObject(ctx, home+uid+".ics", todo(uid, "Task "+uid, props), nil); err != nil {
+			t.Fatalf("put %s: %v", uid, err)
+		}
+	}
+	// One file can't mix events and to-dos.
+	mixed := todo("mixed", "x", nil)
+	mixed.Children = append(mixed.Children, event("mixed", "y", time.Now()).Children...)
+	if _, err := c.PutCalendarObject(ctx, home+"mixed.ics", mixed, nil); err == nil {
+		t.Fatal("mixed file accepted")
+	}
+
+	query := func(comp string, start, end time.Time) []string {
+		t.Helper()
+		objs, err := c.QueryCalendar(ctx, home, &caldav.CalendarQuery{
+			CompRequest: caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true},
+			CompFilter:  caldav.CompFilter{Name: "VCALENDAR", Comps: []caldav.CompFilter{{Name: comp, Start: start, End: end}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var uids []string
+		for _, o := range objs {
+			for _, ch := range o.Data.Children {
+				if u, _ := ch.Props.Text(ical.PropUID); u != "" {
+					uids = append(uids, u)
+					break
+				}
+			}
+		}
+		sort.Strings(uids)
+		return uids
+	}
+	if got := strings.Join(query("VTODO", time.Time{}, time.Time{}), ","); got != "done-nov,due-dec,start-jan,undated" {
+		t.Fatalf("all to-dos: %s", got)
+	}
+	if got := strings.Join(query("VEVENT", time.Time{}, time.Time{}), ","); got != "" {
+		t.Fatalf("events: %s", got)
+	}
+	// December: the one due then, and the undated one (always in range).
+	dec := query("VTODO", time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
+	if got := strings.Join(dec, ","); got != "due-dec,undated" {
+		t.Fatalf("december: %s", got)
+	}
+	nov := query("VTODO", time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC))
+	if got := strings.Join(nov, ","); got != "done-nov,undated" {
+		t.Fatalf("november: %s", got)
 	}
 }
