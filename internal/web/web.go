@@ -138,6 +138,8 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("GET /agenda", u.page(u.agendaPage)) // not /calendar: that was a cached 301 to Settings
 		mux.HandleFunc("GET /tasks", u.page(u.tasksPage))
 		mux.HandleFunc("POST /tasks", u.page(u.createTask))
+		mux.HandleFunc("POST /tasks/sort", u.page(u.setTaskSort))
+		mux.HandleFunc("POST /tasks/order", u.page(u.orderTasks))
 		mux.HandleFunc("GET /tasks/{owner}/{cal}/{name}", u.page(u.taskPage))
 		mux.HandleFunc("POST /tasks/{owner}/{cal}/{name}", u.page(u.saveTask))
 		mux.HandleFunc("POST /tasks/{owner}/{cal}/{name}/done", u.page(u.toggleTask))

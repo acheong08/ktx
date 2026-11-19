@@ -63,3 +63,76 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   e.target.form?.requestSubmit();
 });
+
+// Drag to reorder: a list with data-sortable="<url>" whose items have
+// data-key and a [data-drag-handle]. Pointer events, so touch works too;
+// arrow keys on a focused handle move an item by one. After a move, the
+// keys are posted to the URL in their new order (task=<key>, repeated).
+(() => {
+  let drag = null;
+  const keyed = (list) => [...list.querySelectorAll(":scope > li[data-key]")];
+  const order = (list) => keyed(list).map((li) => li.dataset.key).join("\n");
+  const save = async (list) => {
+    const body = new URLSearchParams();
+    keyed(list).forEach((li) => body.append("task", li.dataset.key));
+    try {
+      const res = await fetch(list.dataset.sortable, { method: "POST", body, credentials: "same-origin" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+    } catch (err) {
+      alert("The new order couldn't be saved (" + err.message + "). The page will reload.");
+      location.reload();
+    }
+  };
+  // place puts li before the first other item whose middle is below y,
+  // staying among the keyed (open, own) items.
+  const place = (list, li, y) => {
+    const others = keyed(list).filter((o) => o !== li);
+    const before = others.find((o) => {
+      const r = o.getBoundingClientRect();
+      return y < r.top + r.height / 2;
+    });
+    if (before) {
+      if (li.nextElementSibling !== before) before.before(li);
+    } else if (others.length && others[others.length - 1].nextElementSibling !== li) {
+      others[others.length - 1].after(li);
+    }
+  };
+  document.addEventListener("pointerdown", (e) => {
+    const handle = e.target.closest("[data-drag-handle]");
+    const li = handle?.closest("li[data-key]");
+    const list = li?.closest("[data-sortable]");
+    if (!list || e.button > 0) return;
+    e.preventDefault();
+    try {
+      handle.setPointerCapture(e.pointerId); // keep getting moves outside the handle
+    } catch {}
+    drag = { li, list, start: order(list) };
+    li.classList.add("dragging");
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (drag) place(drag.list, drag.li, e.clientY);
+  });
+  const end = () => {
+    if (!drag) return;
+    const { li, list, start } = drag;
+    drag = null;
+    li.classList.remove("dragging");
+    if (order(list) !== start) save(list);
+  };
+  document.addEventListener("pointerup", end);
+  document.addEventListener("pointercancel", end);
+  document.addEventListener("keydown", (e) => {
+    const handle = e.target.closest?.("[data-drag-handle]");
+    const li = handle?.closest("li[data-key]");
+    const list = li?.closest("[data-sortable]");
+    if (!list || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    e.preventDefault();
+    const items = keyed(list);
+    const i = items.indexOf(li);
+    if (e.key === "ArrowUp" && i > 0) items[i - 1].before(li);
+    else if (e.key === "ArrowDown" && i < items.length - 1) items[i + 1].after(li);
+    else return;
+    handle.focus();
+    save(list);
+  });
+})();

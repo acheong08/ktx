@@ -2,6 +2,8 @@ package web
 
 import "strconv"
 
+import "github.com/acheong08/ktx/internal/calendar"
+
 import "strings"
 
 templ agendaPage(v agendaView) {
@@ -105,6 +107,19 @@ templ taskList(v tasksView) {
 				}
 			</a>
 		</nav>
+		if !v.All {
+			<form method="post" action="/tasks/sort" class="sortswitch">
+				if v.ShowDone {
+					<input type="hidden" name="show_done" value="1"/>
+				}
+				<span class="muted">Sort:</span>
+				<button type="submit" name="sort" value="due" class={ "link", templ.KV("active", !v.Manual) } aria-pressed={ ariaBool(!v.Manual) }>Due date</button>
+				<button type="submit" name="sort" value="manual" class={ "link", templ.KV("active", v.Manual) } aria-pressed={ ariaBool(v.Manual) }>Manual</button>
+				if v.Manual {
+					<span class="help">Drag ⠿ to reorder (or focus it and use ↑ ↓).</span>
+				}
+			</form>
+		}
 		@flashBox(v.Flash)
 		if len(v.Problems) > 0 {
 			<div class="flash warn">
@@ -125,9 +140,16 @@ templ taskList(v tasksView) {
 				}
 			</p>
 		} else {
-			<ul class="tasks">
+			<ul class="tasks" if v.Manual && !v.All {
+	data-sortable="/tasks/order"
+}>
 				for _, r := range v.Rows {
-					<li class={ templ.KV("done", r.T.Done), templ.KV("overdue", r.Overdue) }>
+					<li class={ templ.KV("done", r.T.Done), templ.KV("overdue", r.Overdue) } if v.Manual && r.Mine && !r.T.Done {
+	data-key={ calendar.TaskKey(r.T) }
+}>
+						if v.Manual && r.Mine && !r.T.Done {
+							<button type="button" class="handle" data-drag-handle aria-label={ "Move " + r.T.Summary }>⠿</button>
+						}
 						if r.Mine {
 							<form method="post" action={ templ.URL(r.URL + "/done") } hx-post={ r.URL + "/done" } hx-target="#tasks" hx-swap="outerHTML" hx-trigger="change">
 								<input type="hidden" name="etag" value={ r.T.ETag }/>

@@ -546,3 +546,92 @@ func TestToDoInRange(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskOrder(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	cal := Calendar{Owner: "antonio", ID: "personal", Name: "Work"}
+	if err := e.svc.CreateCalendar(ctx, cal, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var names []string
+	for i, s := range []string{"A", "B", "C"} {
+		td, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: s, Due: now.AddDate(0, 0, i+1)}, now.Add(time.Duration(i)*time.Minute), "antonio")
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, td.Name)
+	}
+	key := func(i int) string { return "personal/" + names[i] }
+	summaries := func() string {
+		t.Helper()
+		ts, _, err := e.svc.ToDos([]Calendar{cal})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, err := e.svc.TaskOrder("antonio")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.Sort == SortManual {
+			SortManually(ts, o)
+		}
+		var out []string
+		for _, td := range ts {
+			out = append(out, td.Summary)
+		}
+		return strings.Join(out, ",")
+	}
+
+	if o, _ := e.svc.TaskOrder("antonio"); o.Sort != SortDue || summaries() != "A,B,C" {
+		t.Fatalf("default: %+v %s", o, summaries())
+	}
+	// Ordering switches to manual; unordered (new) tasks come first, newest first.
+	if err := e.svc.SetTaskOrder(ctx, "antonio", []string{key(2), key(0)}, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if got := summaries(); got != "B,C,A" {
+		t.Fatalf("manual: %s", got)
+	}
+	f := gitOut(t, "--git-dir", e.remote, "show", "main:calendar/antonio/task-order.json")
+	if !strings.Contains(f, `"sort": "manual"`) || !strings.Contains(f, key(2)) {
+		t.Fatalf("file:\n%s", f)
+	}
+	if msg := gitOut(t, "--git-dir", e.remote, "log", "-1", "--format=%s", "main"); msg != "Tasks: reorder (antonio)" {
+		t.Errorf("commit: %q", msg)
+	}
+	// The order file isn't a calendar.
+	if cals, _ := e.svc.Calendars(); len(cals) != 1 {
+		t.Fatalf("calendars: %+v", cals)
+	}
+	// A done task drops below; reopened, it's back in its place.
+	b, _ := e.svc.ToDo(cal, names[1])
+	if _, err := e.svc.SetToDoDone(ctx, cal, b.Name, b.ETag, true, now, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SetTaskOrder(ctx, "antonio", []string{key(0), key(2)}, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if got := summaries(); got != "A,C,B" {
+		t.Fatalf("with B done: %s", got)
+	}
+	// Back to due date: the order is kept for later.
+	if err := e.svc.SetTaskSort(ctx, "antonio", SortDue, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := e.svc.TaskOrder("antonio"); o.Sort != SortDue || len(o.Order) != 2 {
+		t.Fatalf("due again: %+v", o)
+	}
+	// Deleted tasks are forgotten at the next change.
+	a, _ := e.svc.ToDo(cal, names[0])
+	if err := e.svc.Delete(ctx, cal, a.Name, a.ETag, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SetTaskSort(ctx, "antonio", SortManual, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := e.svc.TaskOrder("antonio"); strings.Join(o.Order, ",") != key(2) {
+		t.Fatalf("after delete: %+v", o)
+	}
+}

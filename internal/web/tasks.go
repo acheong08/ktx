@@ -26,6 +26,7 @@ type taskRow struct {
 type tasksView struct {
 	Chrome   chrome
 	All      bool // everyone's tasks, not just mine
+	Manual   bool // my tasks in my own order (drag to reorder)
 	ShowDone bool
 	Rows     []taskRow
 	DoneN    int // done tasks (shown or not)
@@ -107,6 +108,16 @@ func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
 		return v, err
 	}
 	v.Problems = problems
+	if !all { // everyone's tasks are always by due date: the order is each person's own
+		order, err := u.cal.TaskOrder(owner)
+		if err != nil {
+			return v, err
+		}
+		if order.Sort == calendar.SortManual {
+			v.Manual = true
+			calendar.SortManually(tasks, order)
+		}
+	}
 	now := time.Now()
 	for _, t := range tasks {
 		if t.Done {
@@ -119,6 +130,58 @@ func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
 			Overdue: t.Overdue(now), URL: taskURL(t.Calendar, t.Name)})
 	}
 	return v, nil
+}
+
+// setTaskSort switches my list between due-date and manual order.
+func (u *UI) setTaskSort(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+	defer cancel()
+	if err := u.cal.SetTaskSort(ctx, calendarOwner(user), r.PostFormValue("sort"), actor(r)); err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, tasksURL(false, r.PostFormValue("show_done") == "1"), http.StatusSeeOther)
+}
+
+// orderTasks saves my manual order: the task keys ("<calendar>/<file>")
+// in the order shown, after a drag. Keys of other people's or unknown
+// tasks are dropped.
+func (u *UI) orderTasks(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	owner := calendarOwner(user)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	cals, err := u.cal.Calendars()
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	mine := map[string]calendar.Calendar{}
+	for _, c := range cals {
+		if c.Owner == owner {
+			mine[c.ID] = c
+		}
+	}
+	var keys []string
+	for _, k := range r.PostForm["task"] {
+		id, name, ok := strings.Cut(k, "/")
+		if c, isMine := mine[id]; ok && isMine && calendar.ValidObjectName(name) {
+			if _, err := u.cal.Object(c, name); err == nil {
+				keys = append(keys, k)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+	defer cancel()
+	if err := u.cal.SetTaskOrder(ctx, owner, keys, actor(r)); err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func taskURL(c calendar.Calendar, name string) string {
@@ -425,4 +488,11 @@ func doneValue(done bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+func ariaBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }

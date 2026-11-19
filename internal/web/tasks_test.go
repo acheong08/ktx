@@ -147,3 +147,73 @@ func TestRepeatingTasksUI(t *testing.T) {
 		t.Fatalf("custom rule:\n%s", body)
 	}
 }
+
+func TestManualTaskOrderUI(t *testing.T) {
+	e := setupAuth(t)
+	ant, max := e.browser(), e.browser()
+	e.signIn(t, ant, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi"}}, "/")
+	e.signIn(t, max, idpUser{sub: "u2", username: "maxim", groups: []string{"melzi"}}, "/")
+	day := func(n int) string { return time.Now().AddDate(0, 0, n).Format("2006-01-02") }
+	for i, s := range []string{"First", "Second", "Third"} {
+		ant.do(t, "POST", "/tasks", url.Values{"title": {s}, "due_date": {day(i + 1)}})
+	}
+	max.do(t, "POST", "/tasks", url.Values{"title": {"Maxim's"}})
+	titles := func(body string) string {
+		var out []string
+		for _, m := range regexp.MustCompile(`<a href="/tasks/[^"]+">([^<]+)</a>`).FindAllStringSubmatch(body, -1) {
+			out = append(out, m[1])
+		}
+		return strings.Join(out, ",")
+	}
+	keys := func(body string) map[string]string {
+		out := map[string]string{}
+		for _, m := range regexp.MustCompile(`data-key="([^"]+)"[^>]*>\s*<button[^>]*aria-label="Move ([^"]+)"`).FindAllStringSubmatch(body, -1) {
+			out[m[2]] = m[1]
+		}
+		return out
+	}
+
+	// Due date by default: no handles.
+	_, body, _ := ant.do(t, "GET", "/tasks", nil)
+	if titles(body) != "First,Second,Third" || strings.Contains(body, "data-drag-handle") || !strings.Contains(body, `value="due" class="link active"`) {
+		t.Fatalf("default:\n%s", body)
+	}
+	// Manual: handles on my open tasks, same order until I move something.
+	ant.do(t, "POST", "/tasks/sort", url.Values{"sort": {"manual"}})
+	_, body, _ = ant.do(t, "GET", "/tasks", nil)
+	k := keys(body)
+	if len(k) != 3 || !strings.Contains(body, `data-sortable="/tasks/order"`) {
+		t.Fatalf("manual:\n%s", body)
+	}
+	// Drag: Third to the top. A key of Maxim's (or made up) is ignored.
+	_, maxBody, _ := max.do(t, "GET", "/tasks", nil)
+	maxKey := regexp.MustCompile(`/tasks/maxim/(personal/[^"]+)"`).FindStringSubmatch(maxBody)[1]
+	code, _, _ := ant.do(t, "POST", "/tasks/order", url.Values{"task": {k["Third"], k["First"], maxKey, "personal/nope.ics", k["Second"]}})
+	if code != http.StatusNoContent {
+		t.Fatalf("order: %d", code)
+	}
+	_, body, _ = ant.do(t, "GET", "/tasks", nil)
+	if got := titles(body); got != "Third,First,Second" {
+		t.Fatalf("after drag: %s", got)
+	}
+	if o, _ := e.cal.TaskOrder("antonio"); strings.Contains(strings.Join(o.Order, ","), "nope") || len(o.Order) != 3 {
+		t.Fatalf("stored: %+v", o)
+	}
+	// A new task goes on top.
+	ant.do(t, "POST", "/tasks", url.Values{"title": {"New"}})
+	if _, body, _ = ant.do(t, "GET", "/tasks", nil); titles(body) != "New,Third,First,Second" {
+		t.Fatalf("new: %s", titles(body))
+	}
+	// Everyone stays by due date, without handles; Maxim's own list is unaffected.
+	if _, body, _ = ant.do(t, "GET", "/tasks?who=all", nil); strings.Contains(body, "data-drag-handle") || strings.Contains(body, "Sort:") {
+		t.Fatalf("everyone:\n%s", body)
+	}
+	if _, body, _ = max.do(t, "GET", "/tasks", nil); strings.Contains(body, "data-drag-handle") {
+		t.Fatal("maxim switched to manual")
+	}
+	// Back to due date.
+	ant.do(t, "POST", "/tasks/sort", url.Values{"sort": {"due"}})
+	if _, body, _ = ant.do(t, "GET", "/tasks", nil); titles(body) != "First,Second,Third,New" {
+		t.Fatalf("due again: %s", titles(body))
+	}
+}
