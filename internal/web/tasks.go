@@ -1,6 +1,7 @@
 package web
 
 import (
+	"slices"
 	"context"
 	"errors"
 	"net/http"
@@ -32,7 +33,53 @@ type tasksView struct {
 	Problems []string
 	Flash    flash
 	// The add form, kept when it fails.
-	Title, DueDate, DueTime, Into string
+	Title, DueDate, DueTime, Into, Repeat string
+}
+
+// repeatPresets are the repeat rules the forms offer. A task can have any
+// rule (e.g. from a phone); it's shown as Custom and kept.
+var repeatPresets = []option{
+	{"", "Doesn't repeat"},
+	{"FREQ=DAILY", "Every day"},
+	{"FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", "Every weekday"},
+	{"FREQ=WEEKLY", "Every week"},
+	{"FREQ=WEEKLY;INTERVAL=2", "Every 2 weeks"},
+	{"FREQ=MONTHLY", "Every month"},
+	{"FREQ=YEARLY", "Every year"},
+}
+
+// repeatOptions is the presets, plus the task's own rule if it's another.
+func repeatOptions(current string) []option {
+	for _, o := range repeatPresets {
+		if strings.EqualFold(o.Value, current) {
+			return repeatPresets
+		}
+	}
+	return append(slices.Clone(repeatPresets), option{current, "Custom: " + current})
+}
+
+// describeRule names a repeat rule for the list, e.g. "every week".
+func describeRule(rule string) string {
+	for _, o := range repeatPresets[1:] {
+		if strings.EqualFold(o.Value, rule) {
+			return strings.ToLower(o.Label)
+		}
+	}
+	return "repeats"
+}
+
+// taskSaveError turns a SaveToDo error into a message for the form, or ""
+// when it isn't the person's to fix.
+func taskSaveError(err error) string {
+	switch {
+	case errors.Is(err, calendar.ErrNeedsDue):
+		return "A repeating task needs a due date: it repeats from there."
+	case errors.Is(err, calendar.ErrInvalid) && strings.Contains(err.Error(), "repeat rule"):
+		return "That repeat rule can't be read: " + err.Error()
+	case errors.Is(err, calendar.ErrInvalid):
+		return "Give the task a title."
+	}
+	return ""
 }
 
 func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
@@ -162,6 +209,7 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 	user, _ := currentUser(r)
 	owner := calendarOwner(user)
 	title, date, clock, into := r.PostFormValue("title"), r.PostFormValue("due_date"), r.PostFormValue("due_time"), r.PostFormValue("calendar")
+	repeat := r.PostFormValue("repeat")
 	if into == "" {
 		into = DefaultCalendarID
 	}
@@ -172,8 +220,14 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v.Flash = flash{"error", msg}
-		v.Title, v.DueDate, v.DueTime, v.Into = title, date, clock, into
+		v.Title, v.DueDate, v.DueTime, v.Into, v.Repeat = title, date, clock, into, repeat
 		u.render(w, r, http.StatusUnprocessableEntity, tasksPage(v))
+	}
+	if into == DefaultCalendarID { // as on the page itself, so a first add works too
+		if err := u.cal.EnsureCalendar(r.Context(), owner, DefaultCalendarID, "Personal"); err != nil {
+			u.fail(w, r, err)
+			return
+		}
 	}
 	c, err := u.cal.Calendar(owner, into)
 	if err != nil {
@@ -187,9 +241,9 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
-	t, err := u.cal.SaveToDo(ctx, calendar.ToDo{Calendar: c, Summary: title, Due: due, DueAllDay: allDay}, time.Now(), actor(r))
-	if errors.Is(err, calendar.ErrInvalid) {
-		fail("Give the task a title.")
+	t, err := u.cal.SaveToDo(ctx, calendar.ToDo{Calendar: c, Summary: title, Due: due, DueAllDay: allDay, Rule: repeat}, time.Now(), actor(r))
+	if msg := taskSaveError(err); msg != "" {
+		fail(msg)
 		return
 	}
 	if err != nil {
@@ -233,7 +287,11 @@ func (u *UI) toggleTask(w http.ResponseWriter, r *http.Request) {
 	} else {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 		defer cancel()
-		_, err := u.cal.SetToDoDone(ctx, t.Calendar, t.Name, r.PostFormValue("etag"), r.PostFormValue("done") == "1", time.Now(), actor(r))
+		done := r.PostFormValue("done") == "1"
+		after, err := u.cal.SetToDoDone(ctx, t.Calendar, t.Name, r.PostFormValue("etag"), done, time.Now(), actor(r))
+		if err == nil && done && !after.Done && after.Repeats {
+			msg = flash{"ok", "“" + t.Summary + "” done; next due " + fmtDue(after, time.Now()) + "."}
+		}
 		switch {
 		case errors.Is(err, calendar.ErrPrecondition):
 			msg = flash{"warn", "“" + t.Summary + "” changed elsewhere (a phone?) since this page loaded. Here's the current list; try again."}
@@ -261,14 +319,14 @@ type taskFormView struct {
 	Mine                           bool
 	URL                            string
 	Title, DueDate, DueTime, Notes string
-	Tags                           string
+	Tags, Repeat                   string
 	Done                           bool
 	Flash                          flash
 }
 
 func taskForm(c chrome, t calendar.ToDo, mine bool) taskFormView {
 	v := taskFormView{Chrome: c, T: t, Mine: mine, URL: taskURL(t.Calendar, t.Name),
-		Title: t.Summary, Notes: t.Description, Tags: strings.Join(t.Categories, ", "), Done: t.Done}
+		Title: t.Summary, Notes: t.Description, Tags: strings.Join(t.Categories, ", "), Done: t.Done, Repeat: t.Rule}
 	if !t.Due.IsZero() {
 		if t.DueAllDay {
 			v.DueDate = t.Due.Format("2006-01-02")
@@ -300,6 +358,7 @@ func (u *UI) saveTask(w http.ResponseWriter, r *http.Request) {
 	v := taskForm(u.chrome(r, "tasks"), t, mine)
 	v.Title, v.DueDate, v.DueTime = r.PostFormValue("title"), r.PostFormValue("due_date"), r.PostFormValue("due_time")
 	v.Notes, v.Tags, v.Done = r.PostFormValue("notes"), r.PostFormValue("tags"), r.PostFormValue("done") == "1"
+	v.Repeat = r.PostFormValue("repeat")
 	due, allDay, err := parseDue(v.DueDate, v.DueTime)
 	if err != nil {
 		v.Flash = flash{"error", err.Error()}
@@ -307,7 +366,7 @@ func (u *UI) saveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.ETag = r.PostFormValue("etag")
-	t.Summary, t.Due, t.DueAllDay, t.Done = v.Title, due, allDay, v.Done
+	t.Summary, t.Due, t.DueAllDay, t.Done, t.Rule = v.Title, due, allDay, v.Done, v.Repeat
 	t.Description = strings.ReplaceAll(v.Notes, "\r\n", "\n")
 	t.Categories = nil
 	for _, tag := range strings.Split(v.Tags, ",") {
@@ -322,8 +381,8 @@ func (u *UI) saveTask(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, calendar.ErrPrecondition):
 		v.Flash = flash{"error", "This task changed elsewhere (a phone?) since you opened it. Reload to see the current version; your edits are still in the form."}
 		u.render(w, r, http.StatusConflict, taskPage(v))
-	case errors.Is(err, calendar.ErrInvalid):
-		v.Flash = flash{"error", "Give the task a title."}
+	case taskSaveError(err) != "":
+		v.Flash = flash{"error", taskSaveError(err)}
 		u.render(w, r, http.StatusUnprocessableEntity, taskPage(v))
 	case err != nil:
 		u.fail(w, r, err)

@@ -104,3 +104,46 @@ func TestTasksUI(t *testing.T) {
 		t.Fatalf("after delete: %d", code)
 	}
 }
+
+func TestRepeatingTasksUI(t *testing.T) {
+	e := setupAuth(t)
+	ant := e.browser()
+	e.signIn(t, ant, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi"}}, "/")
+	loc := calendar.DefaultZone()
+	today := time.Now().In(loc)
+
+	// The add form offers repeats; a repeat needs a due date.
+	if _, body, _ := ant.do(t, "GET", "/tasks", nil); !strings.Contains(body, `<select name="repeat" aria-label="Repeat">`) || !strings.Contains(body, `<option value="FREQ=WEEKLY">Every week</option>`) {
+		t.Fatalf("add form:\n%s", body)
+	}
+	if code, body, _ := ant.do(t, "POST", "/tasks", url.Values{"title": {"x"}, "repeat": {"FREQ=WEEKLY"}}); code != http.StatusUnprocessableEntity || !strings.Contains(body, "A repeating task needs a due date") {
+		t.Fatalf("repeat without due: %d", code)
+	}
+	ant.do(t, "POST", "/tasks", url.Values{"title": {"Water plants"}, "due_date": {today.Format("2006-01-02")}, "repeat": {"FREQ=WEEKLY"}})
+	_, body, _ := ant.do(t, "GET", "/tasks", nil)
+	if !strings.Contains(body, `<span class="badge" title="FREQ=WEEKLY">every week</span>`) {
+		t.Fatalf("badge:\n%s", body)
+	}
+
+	// Ticking it done moves it a week on and keeps it open.
+	m := regexp.MustCompile(`hx-post="(/tasks/antonio/personal/[^"]+/done)"[^>]*>\s*<input type="hidden" name="etag" value="([^"]+)"`).FindStringSubmatch(body)
+	_, frag, _ := ant.do(t, "POST", m[1], url.Values{"etag": {m[2]}, "done": {"1"}}, "HX-Request", "true")
+	next := today.AddDate(0, 0, 7).Format("Mon 2 Jan")
+	if !strings.Contains(frag, "“Water plants” done; next due "+next) || !strings.Contains(frag, ">Water plants<") || !strings.Contains(frag, next) {
+		t.Fatalf("after done:\n%s", frag)
+	}
+
+	// The edit form shows the rule; a rule set elsewhere is offered as Custom and kept.
+	link := strings.TrimSuffix(m[1], "/done")
+	_, body, _ = ant.do(t, "GET", link, nil)
+	if !strings.Contains(body, `<select name="repeat" id="repeat">`) || !strings.Contains(body, `<option value="FREQ=WEEKLY" selected>Every week</option>`) {
+		t.Fatalf("edit form:\n%s", body)
+	}
+	etag := regexp.MustCompile(`name="etag" value="([^"]+)"`).FindStringSubmatch(body)[1]
+	due := regexp.MustCompile(`name="due_date" type="date" value="([^"]+)"`).FindStringSubmatch(body)[1]
+	ant.do(t, "POST", link, url.Values{"etag": {etag}, "title": {"Water plants"}, "due_date": {due}, "repeat": {"FREQ=MONTHLY;BYMONTHDAY=1,15"}})
+	_, body, _ = ant.do(t, "GET", link, nil)
+	if !strings.Contains(body, `<option value="FREQ=MONTHLY;BYMONTHDAY=1,15" selected>Custom: FREQ=MONTHLY;BYMONTHDAY=1,15</option>`) {
+		t.Fatalf("custom rule:\n%s", body)
+	}
+}

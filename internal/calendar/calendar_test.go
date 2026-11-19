@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/emersion/go-ical"
 	"time"
 
 	"github.com/acheong08/ktx/internal/gitrepo"
@@ -416,5 +418,131 @@ func TestToDos(t *testing.T) {
 	}
 	if !(ToDo{Due: time.Date(2026, 11, 17, 0, 0, 0, 0, la), DueAllDay: true}).Overdue(now) || (ToDo{Due: time.Date(2026, 11, 18, 0, 0, 0, 0, la), DueAllDay: true}).Overdue(now) {
 		t.Error("overdue for all-day tasks")
+	}
+}
+
+func TestRepeatingToDos(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	cal := Calendar{Owner: "antonio", ID: "personal", Name: "Work"}
+	if err := e.svc.CreateCalendar(ctx, cal, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	la := DefaultZone()
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, la) // a Wednesday
+	file := func(name string) string {
+		return gitOut(t, "--git-dir", e.remote, "show", "main:calendar/antonio/personal/"+name)
+	}
+
+	// A repeating task needs a due date and a valid rule.
+	if _, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: "x", Rule: "FREQ=WEEKLY"}, now, "antonio"); !errors.Is(err, ErrNeedsDue) {
+		t.Fatalf("no due: %v", err)
+	}
+	if _, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: "x", Due: now, Rule: "FREQ=SOMETIMES"}, now, "antonio"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad rule: %v", err)
+	}
+
+	// Weekly on Mondays at 09:00, due this Monday (overdue): done moves it to next Monday.
+	mon := time.Date(2026, 11, 16, 9, 0, 0, 0, la)
+	wk, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: "Weekly review", Due: mon, Rule: "FREQ=WEEKLY;BYDAY=MO"}, now, "antonio")
+	if err != nil || !wk.Repeats || wk.Rule != "FREQ=WEEKLY;BYDAY=MO" {
+		t.Fatalf("create: %+v %v", wk, err)
+	}
+	if f := file(wk.Name); !strings.Contains(f, "RRULE:FREQ=WEEKLY;BYDAY=MO") || !strings.Contains(f, "DTSTART:20261116T170000Z") {
+		t.Fatalf("file:\n%s", f)
+	}
+	wk, err = e.svc.SetToDoDone(ctx, cal, wk.Name, wk.ETag, true, now, "antonio")
+	if err != nil || wk.Done || !wk.Due.Equal(time.Date(2026, 11, 23, 9, 0, 0, 0, la)) {
+		t.Fatalf("after done: due %v done %v err %v", wk.Due.In(la), wk.Done, err)
+	}
+	if f := file(wk.Name); !strings.Contains(f, "DTSTART:20261123T170000Z") || !strings.Contains(f, "STATUS:NEEDS-ACTION") || strings.Contains(f, "COMPLETED:") {
+		t.Fatalf("file after done:\n%s", f)
+	}
+	if msg := gitOut(t, "--git-dir", e.remote, "log", "-1", "--format=%s", "main"); msg != `Calendar: done, next due 2026-11-23 09:00 "Weekly review" (antonio/personal)` {
+		t.Errorf("commit: %q", msg)
+	}
+
+	// Several dates missed: it moves past now, not just one step.
+	daily, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: "Daily", Due: time.Date(2026, 11, 10, 0, 0, 0, 0, la), DueAllDay: true, Rule: "FREQ=DAILY"}, now, "antonio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daily, err = e.svc.SetToDoDone(ctx, cal, daily.Name, daily.ETag, true, now, "antonio")
+	if err != nil || daily.Done || daily.Due.Format("2006-01-02") != "2026-11-19" || !daily.DueAllDay {
+		t.Fatalf("daily: %v %v %v", daily.Due, daily.Done, err)
+	}
+
+	// COUNT is used up; the last one completes the series.
+	cnt, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: "Twice", Due: time.Date(2026, 11, 19, 0, 0, 0, 0, la), DueAllDay: true, Rule: "FREQ=WEEKLY;COUNT=2"}, now, "antonio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cnt, err = e.svc.SetToDoDone(ctx, cal, cnt.Name, cnt.ETag, true, now, "antonio")
+	if err != nil || cnt.Done || cnt.Due.Format("2006-01-02") != "2026-11-26" || cnt.Rule != "FREQ=WEEKLY;COUNT=1" {
+		t.Fatalf("count 1: %+v %v", cnt, err)
+	}
+	cnt, err = e.svc.SetToDoDone(ctx, cal, cnt.Name, cnt.ETag, true, now, "antonio")
+	if err != nil || !cnt.Done {
+		t.Fatalf("count done: %+v %v", cnt, err)
+	}
+
+	// A task from another app: TZID start, due an hour later, monthly. Both move, in its zone.
+	const tz = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nBEGIN:VTODO\r\nUID:rent\r\nDTSTAMP:20261101T000000Z\r\nSUMMARY:Rent\r\n" +
+		"DTSTART;TZID=Europe/London:20261101T090000\r\nDUE;TZID=Europe/London:20261101T100000\r\nRRULE:FREQ=MONTHLY\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+	if _, _, err := e.svc.Import(ctx, cal, strings.NewReader(tz), "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	rent, err := e.svc.ToDo(cal, "rent.ics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetToDoDone(ctx, cal, rent.Name, rent.ETag, true, now, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if f := file("rent.ics"); !strings.Contains(f, "DTSTART;TZID=Europe/London:20261201T090000") || !strings.Contains(f, "DUE;TZID=Europe/London:20261201T100000") {
+		t.Fatalf("rent:\n%s", f)
+	}
+
+	// Moving the due date of a repeating task moves its start (and the series).
+	wk.Due = time.Date(2026, 11, 24, 9, 0, 0, 0, la) // now a Tuesday
+	wk.Rule = "FREQ=WEEKLY;BYDAY=TU"
+	if wk, err = e.svc.SaveToDo(ctx, wk, now, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if f := file(wk.Name); !strings.Contains(f, "DTSTART:20261124T170000Z") || !strings.Contains(f, "RRULE:FREQ=WEEKLY;BYDAY=TU") {
+		t.Fatalf("moved:\n%s", f)
+	}
+	// Turning repeat off keeps the task.
+	wk.Rule = ""
+	if wk, err = e.svc.SaveToDo(ctx, wk, now, "antonio"); err != nil || wk.Repeats || strings.Contains(file(wk.Name), "RRULE") {
+		t.Fatalf("repeat off: %+v %v", wk, err)
+	}
+}
+
+func TestToDoInRange(t *testing.T) {
+	todo := func(lines string) *ical.Component {
+		cal, err := ical.NewDecoder(strings.NewReader("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VTODO\r\nUID:u\r\nDTSTAMP:20260101T000000Z\r\n" + lines + "END:VTODO\r\nEND:VCALENDAR\r\n")).Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cal.Children[0]
+	}
+	dec := [2]time.Time{time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}
+	for name, c := range map[string]struct {
+		lines string
+		want  bool
+	}{
+		"due in range":             {"DUE:20261210T170000Z\r\n", true},
+		"due before":               {"DUE:20261110T170000Z\r\n", false},
+		"weekly from November":     {"DTSTART:20261102T170000Z\r\nDUE:20261102T170000Z\r\nRRULE:FREQ=WEEKLY\r\n", true},
+		"weekly due-only":          {"DUE:20261102T170000Z\r\nRRULE:FREQ=WEEKLY\r\n", true},
+		"weekly ended in November": {"DTSTART:20261102T170000Z\r\nRRULE:FREQ=WEEKLY;UNTIL=20261120T000000Z\r\n", false},
+		"yearly, next one in 2027": {"DTSTART:20260301T170000Z\r\nRRULE:FREQ=YEARLY\r\n", false},
+		"december excluded":        {"DTSTART:20261115T170000Z\r\nRRULE:FREQ=MONTHLY;COUNT=2\r\nEXDATE:20261215T170000Z\r\n", false},
+		"undated":                  {"", true},
+	} {
+		if got := ToDoInRange(todo(c.lines), dec[0], dec[1]); got != c.want {
+			t.Errorf("%s: got %v", name, got)
+		}
 	}
 }

@@ -31,7 +31,8 @@ type ToDo struct {
 	Priority    int // 1 highest .. 9 lowest; 0 none
 	Categories  []string
 	Created     time.Time
-	Repeats     bool // has a repeat rule; ticking it done here doesn't move it to the next date
+	Rule        string // repeat rule (RRULE value), "" if it doesn't repeat
+	Repeats     bool   // Rule != ""; ticking it done moves it to its next date
 }
 
 // Overdue reports whether an open task's due date has passed.
@@ -176,17 +177,30 @@ func toDoOf(c Calendar, o Object) (ToDo, error) {
 	if p := m.Props.Get(ical.PropCreated); p != nil {
 		t.Created, _, _ = propTime(p)
 	}
-	t.Repeats = m.Props.Get(ical.PropRecurrenceRule) != nil
+	if rr := m.Props.Get(ical.PropRecurrenceRule); rr != nil {
+		t.Rule, t.Repeats = rr.Value, true
+	}
 	return t, nil
 }
 
 // SaveToDo creates a task (t.Name empty) or updates one, writing only the
 // fields ToDo has. An update needs the ETag it was read with, so changes
 // made meanwhile (e.g. from a phone) aren't overwritten (ErrPrecondition).
+// Ticking a repeating task done moves it to its next date instead (see
+// advanceToDo); it stays open unless its rule has no date left.
 func (s *Service) SaveToDo(ctx context.Context, t ToDo, now time.Time, user string) (ToDo, error) {
 	t.Summary = strings.Join(strings.Fields(t.Summary), " ")
 	if t.Summary == "" {
 		return ToDo{}, fmt.Errorf("%w: give the task a title", ErrInvalid)
+	}
+	t.Rule = strings.TrimPrefix(strings.TrimSpace(t.Rule), "RRULE:")
+	if t.Rule != "" {
+		if t.Due.IsZero() {
+			return ToDo{}, ErrNeedsDue
+		}
+		if err := ValidateRule(t.Rule); err != nil {
+			return ToDo{}, err
+		}
 	}
 	var cal *ical.Calendar
 	opt := PutOptions{}
@@ -225,12 +239,38 @@ func (s *Service) SaveToDo(ctx context.Context, t ToDo, now time.Time, user stri
 	} else {
 		m.Props.Del(ical.PropDescription)
 	}
-	m.Props.Del(ical.PropDue)
+	var oldDue time.Time
+	oldDueAllDay := false
+	oldDueProp := m.Props.Get(ical.PropDue)
+	if oldDueProp != nil {
+		oldDue, oldDueAllDay, _ = propTime(oldDueProp)
+	}
+	wasDone := isDone(m)
+	switch {
+	case t.Due.IsZero():
+		m.Props.Del(ical.PropDue)
+	case oldDueProp != nil && oldDue.Equal(t.Due) && oldDueAllDay == t.DueAllDay:
+		// Unchanged: keep it as written (e.g. in its own TZID).
+	case oldDueProp != nil && oldDueAllDay == t.DueAllDay:
+		setTimeLike(m, ical.PropDue, oldDueProp, t.Due)
+	case t.DueAllDay:
+		m.Props.SetDate(ical.PropDue, t.Due)
+	default:
+		m.Props.SetDateTime(ical.PropDue, t.Due.UTC())
+	}
 	if !t.Due.IsZero() {
-		if t.DueAllDay {
-			m.Props.SetDate(ical.PropDue, t.Due)
-		} else {
-			m.Props.SetDateTime(ical.PropDue, t.Due.UTC())
+		// A repeating task counts from its start: move the start with the
+		// due date, so the series moves too.
+		if p := m.Props.Get(ical.PropDateTimeStart); p != nil && t.Rule != "" && !oldDue.IsZero() && !oldDue.Equal(t.Due) {
+			if st, stAllDay, err := propTime(p); err == nil {
+				var moved time.Time
+				if stAllDay || oldDueAllDay || t.DueAllDay {
+					moved = st.AddDate(0, 0, daysBetween(oldDue, t.Due))
+				} else {
+					moved = st.Add(t.Due.Sub(oldDue))
+				}
+				setTimeLike(m, ical.PropDateTimeStart, p, moved)
+			}
 		}
 		// DUE must not be before DTSTART; drop a start that would break that.
 		if p := m.Props.Get(ical.PropDateTimeStart); p != nil {
@@ -245,7 +285,34 @@ func (s *Service) SaveToDo(ctx context.Context, t ToDo, now time.Time, user stri
 		p.SetTextList(t.Categories)
 		m.Props.Set(p)
 	}
-	setDone(m, t.Done, now)
+	if t.Rule == "" {
+		m.Props.Del(ical.PropRecurrenceRule)
+	} else {
+		if m.Props.Get(ical.PropDateTimeStart) == nil {
+			// RFC 5545 counts repeats from DTSTART; task apps set it to the
+			// due date (Apple Reminders does), so do the same.
+			setTimeLike(m, ical.PropDateTimeStart, m.Props.Get(ical.PropDue), t.Due)
+		}
+		rr := ical.NewProp(ical.PropRecurrenceRule)
+		rr.Value = t.Rule
+		m.Props.Set(rr)
+	}
+	done := t.Done
+	advanced := false
+	if done && !wasDone && t.Rule != "" {
+		_, ok, err := advanceToDo(m, now)
+		if err != nil {
+			return ToDo{}, err
+		}
+		if ok {
+			done, advanced = false, true
+		}
+	}
+	setDone(m, done, now)
+	if advanced {
+		// Keep when it was last done, for apps that show it.
+		m.Props.SetDateTime("X-KTX-LAST-DONE", now.UTC())
+	}
 	m.Props.SetDateTime(ical.PropLastModified, now.UTC())
 	m.Props.SetDateTime(ical.PropDateTimeStamp, now.UTC())
 
@@ -254,8 +321,11 @@ func (s *Service) SaveToDo(ctx context.Context, t ToDo, now time.Time, user stri
 		o, isNew, paths, err := PutObject(root, t.Calendar, t.Name, cal, opt)
 		out = o
 		verb := "update task"
-		if isNew {
+		switch {
+		case isNew:
 			verb = "add task"
+		case advanced:
+			verb = "done, next due " + nextDueLabel(m)
 		}
 		return paths, fmt.Sprintf("Calendar: %s %q (%s)", verb, t.Summary, t.Calendar.Key()), err
 	})
@@ -265,7 +335,28 @@ func (s *Service) SaveToDo(ctx context.Context, t ToDo, now time.Time, user stri
 	return toDoOf(t.Calendar, out)
 }
 
-// SetToDoDone ticks a task done or open again.
+// ErrNeedsDue is returned for a repeating task without a due date.
+var ErrNeedsDue = fmt.Errorf("%w: a repeating task needs a due date", ErrInvalid)
+
+func isDone(m *ical.Component) bool {
+	st, _ := m.Props.Text(ical.PropStatus)
+	return strings.EqualFold(st, "COMPLETED") || m.Props.Get(ical.PropCompleted) != nil
+}
+
+func nextDueLabel(m *ical.Component) string {
+	if p := m.Props.Get(ical.PropDue); p != nil {
+		if t, allDay, err := propTime(p); err == nil {
+			if allDay {
+				return t.Format("2006-01-02")
+			}
+			return t.In(DefaultZone()).Format("2006-01-02 15:04")
+		}
+	}
+	return "?"
+}
+
+// SetToDoDone ticks a task done or open again. A repeating task ticked done
+// moves to its next date and stays open.
 func (s *Service) SetToDoDone(ctx context.Context, c Calendar, name, etag string, done bool, now time.Time, user string) (ToDo, error) {
 	t, err := s.ToDo(c, name)
 	if err != nil {

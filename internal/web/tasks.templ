@@ -2,6 +2,8 @@ package web
 
 import "strconv"
 
+import "strings"
+
 templ agendaPage(v agendaView) {
 	@layout("Calendar", v.Chrome) {
 		<div class="pagehead">
@@ -76,6 +78,7 @@ templ tasksPage(v tasksView) {
 				<input name="due_date" type="date" value={ v.DueDate } aria-label="Due date (optional)"/>
 				<input name="due_time" type="time" value={ v.DueTime } aria-label="Due time (optional)"/>
 			</label>
+			@repeatSelect("", "Repeat", v.Repeat)
 			if len(v.Mine) > 1 {
 				<select name="calendar" aria-label="Calendar">
 					for _, c := range v.Mine {
@@ -148,7 +151,7 @@ templ taskList(v tasksView) {
 									<span class={ "due", templ.KV("late", r.Overdue) }>{ r.Due }</span>
 								}
 								if r.T.Repeats {
-									<span class="badge">repeats</span>
+									<span class="badge" title={ r.T.Rule }>{ describeRule(r.T.Rule) }</span>
 								}
 								for _, c := range r.T.Categories {
 									<span class="label">{ c }</span>
@@ -172,7 +175,12 @@ templ taskPage(v taskFormView) {
 			<h1>{ v.T.Summary }</h1>
 			<p class="sub">{ v.T.Calendar.Owner }'s task · { v.T.Calendar.Title() }</p>
 			if v.DueDate != "" {
-				<p>Due { v.DueDate } { v.DueTime }</p>
+				<p>
+					Due { v.DueDate } { v.DueTime }
+					if v.T.Repeats {
+						· { describeRule(v.T.Rule) }
+					}
+				</p>
 			}
 			if v.T.Description != "" {
 				<pre class="notes">{ v.T.Description }</pre>
@@ -194,14 +202,14 @@ templ taskPage(v taskFormView) {
 						<input id="due_time" name="due_time" type="time" value={ v.DueTime }/>
 					</div>
 				</div>
+				<label for="repeat">Repeat</label>
+				@repeatSelect("repeat", "", v.Repeat)
 				<label for="tags">Tags</label>
 				<input id="tags" name="tags" type="text" value={ v.Tags } placeholder="Comma-separated, e.g. MVP Bread, blocked"/>
 				<label for="notes">Notes</label>
 				<textarea id="notes" name="notes" rows="12">{ v.Notes }</textarea>
 				<label class="check"><input type="checkbox" name="done" value="1" checked?={ v.Done }/> Done</label>
-				if v.T.Repeats {
-					<p class="help">This task repeats. Ticking it done here marks it done; it isn't moved to the next date.</p>
-				}
+				<p class="help">A repeating task, ticked done, moves to its next date and stays open (as on a phone).</p>
 				<p class="help">In { v.T.Calendar.Title() }, so it shows in your calendar apps too.</p>
 				<button type="submit" class="primary">Save</button>
 			</form>
@@ -212,4 +220,18 @@ templ taskPage(v taskFormView) {
 			</form>
 		}
 	}
+}
+
+// repeatSelect picks a repeat rule; id is the element id (for a label), or
+// "" with an aria-label instead.
+templ repeatSelect(id, ariaLabel, current string) {
+	<select name="repeat" if id != "" {
+	id={ id }
+} else {
+	aria-label={ ariaLabel }
+}>
+		for _, o := range repeatOptions(current) {
+			<option value={ o.Value } selected?={ strings.EqualFold(o.Value, current) }>{ o.Label }</option>
+		}
+	</select>
 }

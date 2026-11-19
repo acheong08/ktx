@@ -378,6 +378,7 @@ func TestToDos(t *testing.T) {
 		"done-nov":  {ical.PropStatus: "COMPLETED", ical.PropCompleted: "20261105T120000Z", ical.PropCreated: "20261101T120000Z"},
 		"undated":   {},
 		"start-jan": {ical.PropDateTimeStart: "20270105T090000Z"},
+		"weekly":    {ical.PropDateTimeStart: "20261102T170000Z", ical.PropDue: "20261102T170000Z", ical.PropRecurrenceRule: "FREQ=WEEKLY"},
 	} {
 		if _, err := c.PutCalendarObject(ctx, home+uid+".ics", todo(uid, "Task "+uid, props), nil); err != nil {
 			t.Fatalf("put %s: %v", uid, err)
@@ -411,19 +412,20 @@ func TestToDos(t *testing.T) {
 		sort.Strings(uids)
 		return uids
 	}
-	if got := strings.Join(query("VTODO", time.Time{}, time.Time{}), ","); got != "done-nov,due-dec,start-jan,undated" {
+	if got := strings.Join(query("VTODO", time.Time{}, time.Time{}), ","); got != "done-nov,due-dec,start-jan,undated,weekly" {
 		t.Fatalf("all to-dos: %s", got)
 	}
 	if got := strings.Join(query("VEVENT", time.Time{}, time.Time{}), ","); got != "" {
 		t.Fatalf("events: %s", got)
 	}
-	// December: the one due then, and the undated one (always in range).
+	// December: the one due then, the undated one (always in range), and
+	// the weekly one that started in November.
 	dec := query("VTODO", time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
-	if got := strings.Join(dec, ","); got != "due-dec,undated" {
+	if got := strings.Join(dec, ","); got != "due-dec,undated,weekly" {
 		t.Fatalf("december: %s", got)
 	}
 	nov := query("VTODO", time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC))
-	if got := strings.Join(nov, ","); got != "done-nov,undated" {
+	if got := strings.Join(nov, ","); got != "done-nov,undated,weekly" {
 		t.Fatalf("november: %s", got)
 	}
 }
