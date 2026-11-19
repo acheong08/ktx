@@ -256,7 +256,7 @@ The first sign-in creates a `personal` calendar. Rename a calendar on **Settings
 
 **Seeding from an export:** **Settings → Calendar** → Import an .ics file (Google, Apple and Outlook exports, up to 50 MB). Events are upserted by UID; nothing is deleted, so importing again is safe. Tasks (VTODO) are imported the same way. The page reports what was added, updated, unchanged and skipped (e.g. entries without a UID), and lists the last 7 and next 14 days with the transcripts linked to each event.
 
-**CalDAV support:** discovery (`/.well-known/caldav`, principal, home set), PROPFIND, calendar-query with time ranges (repeating events expanded), calendar-multiget, GET/PUT/DELETE with ETags and `If-Match`/`If-None-Match`, and `getctag` for change detection. Not supported: sync-collection (clients fall back to ETags), scheduling (invitations aren't emailed), free/busy, tasks.
+**CalDAV support:** discovery (`/.well-known/caldav`, principal, home set), PROPFIND, calendar-query with time ranges (repeating events expanded; tasks by RFC 4791 §9.9), calendar-multiget, GET/PUT/DELETE with ETags and `If-Match`/`If-None-Match`, and `getctag` for change detection. Not supported: sync-collection (clients fall back to ETags), scheduling (invitations aren't emailed), free/busy.
 
 ### Linking transcripts to events
 
