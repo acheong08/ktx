@@ -211,7 +211,7 @@ templ tokensPage(v tokensView) {
 		if v.MCP {
 			<h2 id="apps">Connected apps</h2>
 			<p class="lead">
-				AI agents and other MCP clients can read every transcript and calendar as you (read-only).
+				AI agents and other MCP clients can read every transcript, note and calendar as you, and write notes (always labelled slop).
 				Add the MCP server <code>{ v.MCPURL }</code> to the app; it will ask you to allow it here.
 			</p>
 			if len(v.Apps) > 0 {
@@ -246,8 +246,9 @@ templ authorizePage(v authorizeView) {
 		<section class="narrow">
 			<h1>Allow “{ v.App }”?</h1>
 			<p>
-				It will be able to <strong>read every transcript and calendar in ktx</strong> as { v.Chrome.User }.
-				It can't change anything. Every request it makes says why, and is logged.
+				It will be able to <strong>read every transcript, note and calendar in ktx</strong> as { v.Chrome.User },
+				and <strong>write notes</strong>, which are always labelled slop. It can't change or delete anything.
+				Every request it makes says why, and is logged.
 			</p>
 			<p>Afterwards you'll be sent to <code>{ v.Destination }</code>. Only allow it if you just started connecting this app.</p>
 			<p class="muted">You can revoke it any time under Settings → Tokens.</p>

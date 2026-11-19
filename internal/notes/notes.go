@@ -64,6 +64,7 @@ type Note struct {
 	EditedBy string
 	Body     string
 	Labels   []string
+	Via      string // what wrote it, e.g. "MCP: <app>"; "" for a person in the web UI
 	Pending  bool   // not in git yet: being named or committed
 	Error    string // why the last attempt to save a pending note failed
 
@@ -88,6 +89,7 @@ type meta struct {
 	EditedAt string   `yaml:"edited_at,omitempty"`
 	EditedBy string   `yaml:"edited_by,omitempty"`
 	Labels   []string `yaml:"labels,omitempty,flow"`
+	Via      string   `yaml:"via,omitempty"`
 }
 
 // Service stores notes and runs the worker that saves new ones.
@@ -132,19 +134,45 @@ func (s *Service) Start(ctx context.Context) {
 	}()
 }
 
-// Submit queues a new note and returns its id. The note is named and
-// committed in the background.
+// Submit queues a new note from a person in the web UI and returns its id.
+// The note is named and committed in the background.
 func (s *Service) Submit(body, author string, labels []string) (string, error) {
-	body = normalize(body)
+	return s.SubmitNote(Submission{Body: body, Author: author, Labels: labels})
+}
+
+// Submission is a new note.
+type Submission struct {
+	Body   string
+	Author string
+	Labels []string
+	Title  string // optional; without one the model writes it
+	Via    string // what wrote it, e.g. "MCP: <app>"
+}
+
+// MaxBody bounds a note's text.
+const MaxBody = 1 << 20
+
+// SubmitNote queues a new note and returns its id. It's named (unless it
+// has a title) and labelled by the model, and committed, in the background.
+func (s *Service) SubmitNote(sub Submission) (string, error) {
+	body := normalize(sub.Body)
 	if strings.TrimSpace(body) == "" {
 		return "", errors.New("the note is empty")
 	}
-	labels, err := s.checkLabels(labels, nil)
+	if len(body) > MaxBody {
+		return "", fmt.Errorf("the note is longer than %d bytes", MaxBody)
+	}
+	labels, err := s.checkLabels(sub.Labels, nil)
 	if err != nil {
 		return "", err
 	}
+	title := strings.Join(strings.Fields(sub.Title), " ")
+	if r := []rune(title); len(r) > 100 {
+		title = string(r[:100])
+	}
 	id := newID()
-	if err := s.db.AddPendingNote(state.PendingNote{ID: id, Author: author, Body: body, Labels: labels, CreatedAt: s.now()}); err != nil {
+	if err := s.db.AddPendingNote(state.PendingNote{ID: id, Author: sub.Author, Body: body, Labels: labels,
+		Title: title, Via: sub.Via, CreatedAt: s.now()}); err != nil {
 		return "", err
 	}
 	select {
@@ -178,8 +206,11 @@ func (s *Service) save(ctx context.Context, p state.PendingNote) error {
 		return err
 	}
 	title, suggested, how := s.describe(ctx, p.Body, defs)
+	if p.Title != "" {
+		title, how = p.Title, "given"
+	}
 	n := Note{ID: p.ID, Title: title, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body,
-		Labels: ordered(append(slices.Clone(p.Labels), suggested...), defs)}
+		Labels: ordered(append(slices.Clone(p.Labels), suggested...), defs), Via: p.Via}
 	gctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	res, err := s.repo.Update(gctx, func(root string) (gitrepo.Change, error) {
@@ -187,7 +218,11 @@ func (s *Service) save(ctx context.Context, p state.PendingNote) error {
 			return gitrepo.Change{}, err // already committed (e.g. a crash after the commit)
 		}
 		n.Path = path.Join(Root, fileName(n))
-		ch := gitrepo.Change{Paths: []string{n.Path}, Message: commitMessage("Add note", n.Title, n.ID, n.Author)}
+		msg := commitMessage("Add note", n.Title, n.ID, n.Author)
+		if n.Via != "" {
+			msg += "\nVia: " + n.Via
+		}
+		ch := gitrepo.Change{Paths: []string{n.Path}, Message: msg}
 		return ch, writeFile(root, n.Path, render(n))
 	})
 	if err != nil {
@@ -372,7 +407,7 @@ func (s *Service) missing(id string) error {
 }
 
 func pendingNote(p state.PendingNote) Note {
-	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body, Labels: p.Labels, Pending: true, Error: p.Error}
+	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body, Labels: p.Labels, Via: p.Via, Pending: true, Error: p.Error}
 	n.search = strings.ToLower(n.Author + "\n" + strings.Join(n.Labels, " ") + "\n" + n.Body)
 	return n
 }
@@ -408,7 +443,7 @@ func render(n Note) []byte {
 	b.WriteString("---\n")
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
-	_ = enc.Encode(meta{Title: n.Title, Created: n.Created.Format(time.RFC3339), Author: n.Author, EditedAt: n.EditedAt, EditedBy: n.EditedBy, Labels: n.Labels})
+	_ = enc.Encode(meta{Title: n.Title, Created: n.Created.Format(time.RFC3339), Author: n.Author, EditedAt: n.EditedAt, EditedBy: n.EditedBy, Labels: n.Labels, Via: n.Via})
 	b.WriteString("---\n")
 	b.WriteString(n.Body)
 	if !strings.HasSuffix(n.Body, "\n") {
@@ -431,7 +466,7 @@ func readNote(root, rel string) (Note, error) {
 		if fm, b, ok := strings.Cut(rest, "\n---\n"); ok {
 			var m meta
 			if err := yaml.Unmarshal([]byte(fm), &m); err == nil {
-				n.Title, n.Author, n.EditedAt, n.EditedBy, n.Labels = m.Title, m.Author, m.EditedAt, m.EditedBy, m.Labels
+				n.Title, n.Author, n.EditedAt, n.EditedBy, n.Labels, n.Via = m.Title, m.Author, m.EditedAt, m.EditedBy, m.Labels, m.Via
 				if t, err := time.Parse(time.RFC3339, m.Created); err == nil {
 					n.Created = t
 				}

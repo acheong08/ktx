@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"html"
 	"net/http"
 	"net/url"
@@ -185,14 +186,14 @@ func TestMCPOverOAuth(t *testing.T) {
 	var names []string
 	for _, tl := range tools.Tools {
 		names = append(names, tl.Name)
-		if !tl.Annotations.ReadOnlyHint {
-			t.Errorf("%s isn't marked read-only", tl.Name)
+		if tl.Annotations.ReadOnlyHint != (tl.Name != "create_note") {
+			t.Errorf("%s: read-only hint is %v", tl.Name, tl.Annotations.ReadOnlyHint)
 		}
 		if !strings.Contains(string(mustJSON(tl.InputSchema)), `"intent"`) {
 			t.Errorf("%s has no intent argument: %s", tl.Name, mustJSON(tl.InputSchema))
 		}
 	}
-	if strings.Join(names, ",") != "get_note,get_transcript,list_calendars,list_events,list_note_labels,list_transcript_types,search_notes,search_transcripts" {
+	if strings.Join(names, ",") != "create_note,get_note,get_transcript,list_calendars,list_events,list_note_labels,list_transcript_types,search_notes,search_transcripts" {
 		t.Fatalf("tools: %v", names)
 	}
 
@@ -304,6 +305,36 @@ func TestMCPOverOAuth(t *testing.T) {
 	}
 	if out["text"] != "Runway is 14 months\nHire in Q1.\n" || out["author"] != "antonio" {
 		t.Fatalf("get_note: %v", out)
+	}
+
+	// Writing a note: always slop, whatever the agent asks; attributed to the app.
+	if _, err := e.notes.PutLabel(ctx, "competitors", "About other companies", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if _, msg := call("create_note", map[string]any{"intent": "test", "text": "x", "labels": []string{"nope"}}); !strings.Contains(msg, "no label") {
+		t.Fatalf("unknown label: %q", msg)
+	}
+	if _, msg := call("create_note", map[string]any{"intent": "test", "text": "  "}); !strings.Contains(msg, "empty") {
+		t.Fatalf("empty: %q", msg)
+	}
+	out, msg = call("create_note", map[string]any{"intent": "save the research", "text": "Acme charges per seat.", "title": "Acme pricing research", "labels": []string{"competitors"}})
+	if msg != "" || out["pending"] != true || fmt.Sprint(out["labels"]) != "[slop competitors]" {
+		t.Fatalf("create_note: %v %s", out, msg)
+	}
+	cid := out["id"].(string)
+	for i := 0; i < 200; i++ {
+		if n, _ := e.notes.Get(cid); !n.Pending {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	out, _ = call("get_note", map[string]any{"intent": "test", "id": cid})
+	if out["title"] != "Acme pricing research" || out["via"] != "MCP: DeepSeek Harness" || out["author"] != "antonio" || fmt.Sprint(out["labels"]) != "[slop competitors]" {
+		t.Fatalf("created note: %v", out)
+	}
+	b.client.CheckRedirect = nil
+	if _, body, _ := b.do(t, "GET", "/notes/"+cid, nil); !strings.Contains(body, "via MCP: DeepSeek Harness") || !strings.Contains(body, `class="label" href="/notes?label=slop"`) {
+		t.Fatalf("note page: %s", body)
 	}
 
 	// Refresh: new tokens work, old ones don't.

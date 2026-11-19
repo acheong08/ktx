@@ -30,12 +30,16 @@ func (i listEventsIn) intentText() string    { return i.Intent }
 func (i searchNotesIn) intentText() string   { return i.Intent }
 func (i getNoteIn) intentText() string       { return i.Intent }
 func (i listLabelsIn) intentText() string    { return i.Intent }
+func (i createNoteIn) intentText() string    { return i.Intent }
 
 func ptr[T any](v T) *T { return &v }
 
-// addTool registers a read-only tool that requires and logs an intent.
+// addTool registers a tool that requires and logs an intent. Tools are
+// read-only unless they set their own annotations.
 func addTool[In withIntent, Out any](srv *mcp.Server, s *Server, c caller, t *mcp.Tool, h func(context.Context, In) (Out, error)) {
-	t.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
+	if t.Annotations == nil {
+		t.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
+	}
 	mcp.AddTool(srv, t, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 		var zero Out
 		intent := strings.Join(strings.Fields(in.intentText()), " ")
@@ -83,6 +87,16 @@ func (s *Server) addTools(srv *mcp.Server, c caller) {
 			Description: "Find notes people wrote in ktx (separate from transcripts), newest first. All filters are optional. " +
 				"Returns titles, authors, labels and, with a query, a snippet; read one with get_note. See list_note_labels for what labels mean.",
 		}, s.searchNotes)
+		addTool(srv, s, c, &mcp.Tool{
+			Name:  "create_note",
+			Title: "Write a note",
+			Description: "Save a note in ktx as the user. It is always labelled " + SlopLabel + " (see list_note_labels), " +
+				"so people know an agent wrote it; you may add other labels. It's saved at once and committed within seconds; " +
+				"without a title, one is written for it. Only write what the user asked you to keep.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: false, OpenWorldHint: ptr(false)},
+		}, func(ctx context.Context, in createNoteIn) (createNoteOut, error) {
+			return s.createNote(ctx, in, c)
+		})
 		addTool(srv, s, c, &mcp.Tool{
 			Name:        "get_note",
 			Title:       "Read a note",
@@ -599,6 +613,7 @@ func linkKey(uid, rid string) string {
 // --- notes -----------------------------------------------------------------
 
 type noteSummary struct {
+	Via       string   `json:"via,omitempty" jsonschema:"what wrote it, e.g. MCP: <app>; empty for a person"`
 	ID        string   `json:"id"`
 	Title     string   `json:"title" jsonschema:"empty while the note is still being saved"`
 	Created   string   `json:"created"`
@@ -610,7 +625,7 @@ type noteSummary struct {
 }
 
 func summarizeNote(n notes.Note) noteSummary {
-	return noteSummary{ID: n.ID, Title: n.Title, Created: formatTime(n.Created), Author: n.Author, Labels: n.Labels, Pending: n.Pending, TextBytes: len(n.Body)}
+	return noteSummary{Via: n.Via, ID: n.ID, Title: n.Title, Created: formatTime(n.Created), Author: n.Author, Labels: n.Labels, Pending: n.Pending, TextBytes: len(n.Body)}
 }
 
 type searchNotesIn struct {
@@ -740,4 +755,46 @@ func startOf(e store.Entry) time.Time {
 		return e.Start.In(calendar.DefaultZone())
 	}
 	return e.LocalStart()
+}
+
+// SlopLabel is the label every note written through MCP gets. It's defined
+// with slopMeaning if nobody has defined it.
+const (
+	SlopLabel   = "slop"
+	slopMeaning = "Written by an AI agent or pasted AI output, not reviewed by a person. Don't take it as fact, decision or anyone's opinion."
+)
+
+type createNoteIn struct {
+	Intent string   `json:"intent" jsonschema:"One sentence: what the user asked for and why this call helps. Logged for the people whose data this is."`
+	Text   string   `json:"text" jsonschema:"the note (Markdown)"`
+	Title  string   `json:"title,omitempty" jsonschema:"a short title; leave it out to have one written"`
+	Labels []string `json:"labels,omitempty" jsonschema:"more labels from list_note_labels; slop is always added"`
+}
+
+type createNoteOut struct {
+	ID      string   `json:"id"`
+	Labels  []string `json:"labels" jsonschema:"labels so far; the model may add fitting ones when it saves the note"`
+	Pending bool     `json:"pending" jsonschema:"true: being named and committed; get_note shows it meanwhile"`
+}
+
+func (s *Server) createNote(ctx context.Context, in createNoteIn, c caller) (createNoteOut, error) {
+	if strings.TrimSpace(in.Text) == "" {
+		return createNoteOut{}, errors.New("text is empty")
+	}
+	if err := s.notes.EnsureLabel(ctx, SlopLabel, slopMeaning, c.user.Display()); err != nil {
+		return createNoteOut{}, err
+	}
+	labels := append([]string{SlopLabel}, in.Labels...)
+	id, err := s.notes.SubmitNote(notes.Submission{
+		Body: in.Text, Author: c.user.Display(), Labels: labels, Title: in.Title, Via: "MCP: " + c.grant.ClientName,
+	})
+	if err != nil {
+		return createNoteOut{}, err
+	}
+	n, err := s.notes.Get(id)
+	if err != nil {
+		return createNoteOut{}, err
+	}
+	s.log.Info("note created over mcp", "id", id, "user", c.user.Display(), "app", c.grant.ClientName, "labels", n.Labels)
+	return createNoteOut{ID: id, Labels: n.Labels, Pending: n.Pending}, nil
 }

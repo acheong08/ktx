@@ -78,7 +78,12 @@ templ noteResults(v notesView) {
 							</div>
 						</td>
 						<td data-label="Written" class="date">{ fmtNoteDate(n.Created) }</td>
-						<td data-label="By">{ n.Author }</td>
+						<td data-label="By">
+							{ n.Author }
+							if n.Via != "" {
+								<span class="muted">via { n.Via }</span>
+							}
+						</td>
 					</tr>
 				}
 			</tbody>
@@ -110,6 +115,9 @@ templ noteDetailPage(v noteView) {
 			@flashBox(v.Flash)
 			<p class="sub">
 				{ fmtNoteDate(v.Note.Created) } · { v.Note.Author }
+				if v.Note.Via != "" {
+					via { v.Note.Via }
+				}
 				if v.Note.EditedAt != "" {
 					· edited by { v.Note.EditedBy }
 				}

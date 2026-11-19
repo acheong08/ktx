@@ -174,7 +174,7 @@ One workspace-wide [Neuralwatt](https://neuralwatt.com) key (`https://api.neural
 
 `https://brain.internal.melzi.dev/mcp` is an MCP server (streamable HTTP, stateless) for AI agents. It needs sign-in to be configured (`BRAIN_OIDC_ISSUER`); without it there's no `/mcp`.
 
-**What an agent can do:** read, as the person who allowed it, everything that person sees in the web UI: every transcript, note and calendar. Nothing can be changed. Tools:
+**What an agent can do:** read, as the person who allowed it, everything that person sees in the web UI (every transcript, note and calendar), and write notes. Notes written over MCP always get the `slop` label (the agent can add others but not drop it; a person takes it off in the UI after reviewing), carry `via: "MCP: <app>"` in their front matter and a `Via:` commit trailer, and are attributed to the person. If `slop` isn't defined, the first such note defines it. Nothing else can be changed. Nothing can be changed. Tools:
 
 | Tool | |
 |---|---|
@@ -183,7 +183,8 @@ One workspace-wide [Neuralwatt](https://neuralwatt.com) key (`https://api.neural
 | `list_transcript_types` | Types with counts. |
 | `list_note_labels` | The note labels, what each means, and how many notes have it. |
 | `search_notes` | Notes newest first, with their labels; filters: words, author, label, without_label, from/to dates. Notes still being saved are included (`pending`, no title yet). |
-| `get_note` | A note's title, author, dates and text. |
+| `get_note` | A note's title, author, labels, dates and text. |
+| `create_note` | Writes a note (text, optional title and extra labels), labelled `slop`. Queued and committed like a scratchpad note; without a title the model writes one. |
 | `list_calendars` | Every calendar, with owner; `yours` marks the caller's. |
 | `list_events` | Occurrences in a range (default: today + 7 days, at most a year), optionally by calendar or words; organizer, guests, location, description (cut at 2000 bytes), and the transcripts recorded in each. |
 
@@ -192,7 +193,7 @@ Every tool requires an `intent`: one sentence on why the call is made. It is wri
 **Connecting an app:** add the URL as a remote MCP server. The app discovers the rest and opens a browser:
 1. `/mcp` answers 401 with `WWW-Authenticate: Bearer resource_metadata=…/.well-known/oauth-protected-resource/mcp` (RFC 9728), naming ktx as the authorization server (`/.well-known/oauth-authorization-server`, RFC 8414).
 2. The app registers itself at `/oauth/register` (dynamic client registration; always a public client). Redirect URIs may be `https`, `http` (ktx is tailnet-only) or an app scheme; `javascript:`, `data:` and the like are refused. Apps that never get allowed are removed after a day.
-3. `/oauth/authorize` signs you in through Pocket ID as usual and shows a consent page naming the app and where you'll be sent back to. PKCE (S256) is required.
+3. `/oauth/authorize` signs you in through Pocket ID as usual and shows a consent page naming the app, what it can do (read everything, write notes labelled slop) and where you'll be sent back to. PKCE (S256) is required.
 4. `/oauth/token` swaps the code (once, within 5 minutes) for an access token (1 hour) and a refresh token (60 days, rotated on every use). Tokens are stored as hashes in `state.db` (`oauth_grants`); revoking the app deletes them.
 
 ## Connectors

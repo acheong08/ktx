@@ -343,3 +343,41 @@ func TestLabels(t *testing.T) {
 		t.Fatalf("after delete: %+v", defs)
 	}
 }
+
+func TestSubmitNoteWithTitleAndVia(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	// EnsureLabel defines a missing label and leaves an existing one alone.
+	if err := e.svc.EnsureLabel(ctx, "slop", "first meaning", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.EnsureLabel(ctx, "slop", "other meaning", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if defs, _ := e.svc.Labels(); len(defs) != 1 || defs[0].Description != "first meaning" {
+		t.Fatalf("labels: %+v", defs)
+	}
+	if err := e.ai.Save(ctx, "nw-secret-key-1234", "", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	e.start(t)
+	id, err := e.svc.SubmitNote(Submission{Body: "Agent notes.", Author: "antonio", Labels: []string{"slop"}, Title: "  Given\ttitle ", Via: "MCP: Harness"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := e.wait(t, id)
+	if n.Title != "Given title" || n.Via != "MCP: Harness" || strings.Join(n.Labels, ",") != "slop" {
+		t.Fatalf("note: %+v", n)
+	}
+	file := gitShow(t, e.remote, "main:"+n.Path)
+	if !strings.Contains(file, "via: 'MCP: Harness'\n") && !strings.Contains(file, "via: \"MCP: Harness\"\n") {
+		t.Fatalf("file:\n%s", file)
+	}
+	if log := gitShow(t, e.remote, "main"); !strings.Contains(log, "Via: MCP: Harness") {
+		t.Fatalf("commit:\n%s", log)
+	}
+	// Editing keeps where it came from.
+	if n, err = e.svc.Edit(ctx, id, "Reviewed", "Agent notes.", nil, "antonio"); err != nil || n.Via != "MCP: Harness" {
+		t.Fatalf("edit: %+v %v", n, err)
+	}
+}

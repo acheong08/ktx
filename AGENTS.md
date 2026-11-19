@@ -10,7 +10,7 @@ One Go service, **brain-server**, owning a clone of the data repo `git@github.co
 transcripts/<type>/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md   Markdown + YAML front matter; folder = type ("unsorted" = none)
 calendar/<owner>/<calendar>/calendar.json             name, colour, description
 calendar/<owner>/<calendar>/<uid>.ics                 one event (series + overrides + VTIMEZONEs)
-notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md              scratchpad notes: title, created, author, labels (+ edited_*)
+notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md              scratchpad notes: title, created, author, labels, via (+ edited_*)
 notes/labels.yaml                                     note labels: name + description (meaning); edited in Settings → Labels
 .ktx/deleted                                          ids deleted in the UI, so syncs don't bring them back
 ```
@@ -21,7 +21,7 @@ Ways in:
 - **Connectors** (inside the service, per-user credentials): Granola (REST API, Business key) and Pocket. Each has a "Type for …" setting for where *new* documents go; documents already stored stay where they are.
 - **Notes** (web UI scratchpad): saved to `pending_notes` in SQLite, then a worker titles them and adds fitting labels (Neuralwatt via fantasy, workspace key set by admins in Settings → AI; one call returns `Title:`/`Labels:` lines; fallback first line, author's labels only) and commits. Edits/deletes are synchronous. Labels in use can't be deleted.
 - **CalDAV** at `/dav/` (Apple Calendar, Thunderbird), Basic auth with a calendar-scoped token.
-- **MCP** at `/mcp` (read-only tools over transcripts, notes and calendars; every call needs an `intent`, logged as `mcp call`). ktx is its own OAuth server (DCR, PKCE, rotating refresh tokens); consent at `/oauth/authorize` uses the normal Pocket ID sign-in. Only when OIDC is configured.
+- **MCP** at `/mcp` (read tools over transcripts, notes and calendars, plus `create_note`, which always adds the `slop` label (defined automatically if missing) and records `via: MCP: <app>`; every call needs an `intent`, logged as `mcp call`). ktx is its own OAuth server (DCR, PKCE, rotating refresh tokens); consent at `/oauth/authorize` uses the normal Pocket ID sign-in. Only when OIDC is configured.
 
 Key behaviours:
 - Document id = sha256(source+source_id)[:12], else hash of content. A file is found by its `-<id>.md` suffix anywhere under `transcripts/`, so moving between type folders keeps identity.
@@ -113,5 +113,5 @@ UI checks without a passkey: write a throwaway test (not committed) that calls `
 - Calendar: invitations aren't sent; no sync-collection; a name-only participant plus the same person from the calendar (with email) shows twice.
 - Johann's pasted transcript says 2:00 PM; Granola says 12:00 PM (unconfirmed which is right).
 - fantasy keys provider options by provider name: don't `WithName` the openaicompat provider, or `reasoning_effort` is silently dropped.
-- MCP is read-only for now; write tools (uploads, types, event links, events) are a possible next step.
+- MCP writes only notes (always slop); other write tools (uploads, types, event links, events) are a possible next step.
 - Later: bookings (Cal.com) through the calendar; possibly move outreach's Granola→Folk logging into ktx.

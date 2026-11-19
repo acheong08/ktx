@@ -1,6 +1,7 @@
-// Package mcpserver is ktx's MCP server (/mcp): read-only tools for agents
-// to search and read transcripts and calendars, as the person who
-// authorized them over OAuth (package oauth).
+// Package mcpserver is ktx's MCP server (/mcp): tools for agents to search
+// and read transcripts, notes and calendars, and to write notes (always
+// labelled slop), as the person who authorized them over OAuth (package
+// oauth).
 //
 // Agents see what the person sees in the web UI: every transcript and every
 // calendar. Every call must say why it's being made (the intent argument);
@@ -125,7 +126,7 @@ func (s *Server) instructions(u state.User) string {
 	if s.cal != nil {
 		fmt.Fprintf(&b, "Their own calendars are owned by %q. ", calendarOwner(u))
 	}
-	b.WriteString("Access is read-only.\n\n" +
+	b.WriteString("Access is read-only, except create_note, which saves a note labelled slop.\n\n" +
 		"Every tool takes an `intent`: one sentence on what the user asked for and why this call helps. It is logged.\n\n" +
 		"Start with search_transcripts (filters: words, type, participant, dates) and read one with get_transcript. " +
 		"Notes (search_notes, get_note) are free-form things people wrote down, separate from transcripts. " +

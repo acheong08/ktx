@@ -152,6 +152,9 @@ var migrations = []string{
 	);`,
 	// Labels the author picked for a queued note, comma-separated.
 	`ALTER TABLE pending_notes ADD COLUMN labels TEXT NOT NULL DEFAULT '';`,
+	// A title given by the writer (agents may), and what wrote the note.
+	`ALTER TABLE pending_notes ADD COLUMN title TEXT NOT NULL DEFAULT '';
+	ALTER TABLE pending_notes ADD COLUMN via TEXT NOT NULL DEFAULT '';`,
 }
 
 func (s *DB) migrate() error {

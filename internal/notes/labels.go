@@ -207,3 +207,17 @@ func writeLabels(root string, defs []Label) error {
 	}
 	return writeFile(root, LabelsFile, b.Bytes())
 }
+
+// EnsureLabel defines a label with a meaning if it isn't defined yet, and
+// leaves an existing one as it is.
+func (s *Service) EnsureLabel(ctx context.Context, name, description, user string) error {
+	defs, err := s.Labels()
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(defs, func(d Label) bool { return d.Name == name }) {
+		return nil
+	}
+	_, err = s.PutLabel(ctx, name, description, user)
+	return err
+}
