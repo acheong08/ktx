@@ -81,6 +81,12 @@ templ tasksPage(v tasksView) {
 				<input name="due_time" type="time" value={ v.DueTime } aria-label="Due time (optional)"/>
 			</label>
 			@repeatSelect("", "Repeat", v.Repeat)
+			<input name="tags" type="text" value={ v.Tags } placeholder="Tags, comma-separated" aria-label="Tags (optional, comma-separated)" list="task-tags" autocomplete="off"/>
+			<datalist id="task-tags">
+				for _, tag := range v.KnownTags {
+					<option value={ tag }></option>
+				}
+			</datalist>
 			if len(v.Mine) > 1 {
 				<select name="calendar" aria-label="Calendar">
 					for _, c := range v.Mine {

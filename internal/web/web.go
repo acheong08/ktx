@@ -280,7 +280,7 @@ type chrome struct {
 	AI          bool
 	Notes       bool
 	Labels      bool
-	Agenda      bool // the Calendar and Tasks pages
+	Agenda      bool   // the Calendar and Tasks pages
 	Nav         string // active section
 }
 

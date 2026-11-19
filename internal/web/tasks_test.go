@@ -217,3 +217,25 @@ func TestManualTaskOrderUI(t *testing.T) {
 		t.Fatalf("due again: %s", titles(body))
 	}
 }
+
+func TestAddTaskWithTags(t *testing.T) {
+	e := setupAuth(t)
+	ant := e.browser()
+	e.signIn(t, ant, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi"}}, "/")
+	if _, body, _ := ant.do(t, "GET", "/tasks", nil); !strings.Contains(body, `name="tags"`) || !strings.Contains(body, `list="task-tags"`) {
+		t.Fatalf("add form has no tags:\n%s", body)
+	}
+	ant.do(t, "POST", "/tasks", url.Values{"title": {"Tagged"}, "tags": {" Crush,  home ,crush,, "}})
+	_, body, _ := ant.do(t, "GET", "/tasks", nil)
+	if !strings.Contains(body, `<span class="label">Crush</span>`) || !strings.Contains(body, `<span class="label">home</span>`) || strings.Count(body, `<span class="label">`) != 2 {
+		t.Fatalf("tags:\n%s", body)
+	}
+	// They're suggested next time.
+	if !strings.Contains(body, `<option value="Crush"></option>`) || !strings.Contains(body, `<option value="home"></option>`) {
+		t.Fatalf("suggestions:\n%s", body)
+	}
+	// A failed add keeps what was typed.
+	if _, body, _ = ant.do(t, "POST", "/tasks", url.Values{"title": {" "}, "tags": {"keep me"}}); !strings.Contains(body, `value="keep me"`) {
+		t.Fatalf("kept:\n%s", body)
+	}
+}

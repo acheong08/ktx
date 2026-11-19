@@ -1,11 +1,12 @@
 package web
 
 import (
-	"slices"
 	"context"
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,7 +35,23 @@ type tasksView struct {
 	Problems []string
 	Flash    flash
 	// The add form, kept when it fails.
-	Title, DueDate, DueTime, Into, Repeat string
+	Title, DueDate, DueTime, Into, Repeat, Tags string
+	KnownTags                                   []string // tags on the tasks shown, for suggestions
+}
+
+// parseTags reads a comma-separated tag list, dropping blanks and repeats
+// (ignoring case; the first spelling wins).
+func parseTags(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, tag := range strings.Split(s, ",") {
+		tag = strings.Join(strings.Fields(tag), " ")
+		if tag != "" && !seen[strings.ToLower(tag)] {
+			seen[strings.ToLower(tag)] = true
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 // repeatPresets are the repeat rules the forms offer. A task can have any
@@ -119,6 +136,18 @@ func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
 		}
 	}
 	now := time.Now()
+	seen := map[string]bool{}
+	for _, t := range tasks {
+		if t.Calendar.Owner == owner {
+			for _, c := range t.Categories {
+				if !seen[strings.ToLower(c)] {
+					seen[strings.ToLower(c)] = true
+					v.KnownTags = append(v.KnownTags, c)
+				}
+			}
+		}
+	}
+	sort.Strings(v.KnownTags)
 	for _, t := range tasks {
 		if t.Done {
 			v.DoneN++
@@ -272,7 +301,7 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 	user, _ := currentUser(r)
 	owner := calendarOwner(user)
 	title, date, clock, into := r.PostFormValue("title"), r.PostFormValue("due_date"), r.PostFormValue("due_time"), r.PostFormValue("calendar")
-	repeat := r.PostFormValue("repeat")
+	repeat, tags := r.PostFormValue("repeat"), r.PostFormValue("tags")
 	if into == "" {
 		into = DefaultCalendarID
 	}
@@ -283,7 +312,7 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v.Flash = flash{"error", msg}
-		v.Title, v.DueDate, v.DueTime, v.Into, v.Repeat = title, date, clock, into, repeat
+		v.Title, v.DueDate, v.DueTime, v.Into, v.Repeat, v.Tags = title, date, clock, into, repeat, tags
 		u.render(w, r, http.StatusUnprocessableEntity, tasksPage(v))
 	}
 	if into == DefaultCalendarID { // as on the page itself, so a first add works too
@@ -304,7 +333,7 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
-	t, err := u.cal.SaveToDo(ctx, calendar.ToDo{Calendar: c, Summary: title, Due: due, DueAllDay: allDay, Rule: repeat}, time.Now(), actor(r))
+	t, err := u.cal.SaveToDo(ctx, calendar.ToDo{Calendar: c, Summary: title, Due: due, DueAllDay: allDay, Rule: repeat, Categories: parseTags(tags)}, time.Now(), actor(r))
 	if msg := taskSaveError(err); msg != "" {
 		fail(msg)
 		return
@@ -431,12 +460,7 @@ func (u *UI) saveTask(w http.ResponseWriter, r *http.Request) {
 	t.ETag = r.PostFormValue("etag")
 	t.Summary, t.Due, t.DueAllDay, t.Done, t.Rule = v.Title, due, allDay, v.Done, v.Repeat
 	t.Description = strings.ReplaceAll(v.Notes, "\r\n", "\n")
-	t.Categories = nil
-	for _, tag := range strings.Split(v.Tags, ",") {
-		if tag = strings.TrimSpace(tag); tag != "" {
-			t.Categories = append(t.Categories, tag)
-		}
-	}
+	t.Categories = parseTags(v.Tags)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
 	_, err = u.cal.SaveToDo(ctx, t, time.Now(), actor(r))
