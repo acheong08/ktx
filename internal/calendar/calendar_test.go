@@ -2,6 +2,7 @@ package calendar
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -330,5 +331,90 @@ func TestLinkingThroughStore(t *testing.T) {
 	file = gitOut(t, "--git-dir", e.remote, "show", "main:"+res.Path)
 	if !strings.Contains(file, "calendar_event:\n  match: none") || strings.Contains(file, "from: calendar") {
 		t.Errorf("manual 'no event' not kept:\n%s", file)
+	}
+}
+
+func TestToDos(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	cal := Calendar{Owner: "antonio", ID: "personal", Name: "Work"}
+	if err := e.svc.CreateCalendar(ctx, cal, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	// An imported task with things the UI doesn't edit (an alarm, a relation, an app's own property).
+	const imported = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nBEGIN:VTODO\r\nUID:imp-1\r\nDTSTAMP:20261101T000000Z\r\n" +
+		"SUMMARY:Imported\r\nDUE:20261125T170000Z\r\nPRIORITY:2\r\nCATEGORIES:MVP Bread,blocked\r\nRELATED-TO;RELTYPE=DEPENDS-ON:imp-0\r\n" +
+		"X-APPLE-SORT-ORDER:42\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:x\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+	if _, _, err := e.svc.Import(ctx, cal, strings.NewReader(imported), "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	la := DefaultZone()
+	mk := func(summary string, due time.Time, allDay bool) ToDo {
+		t.Helper()
+		td, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: summary, Due: due, DueAllDay: allDay}, now, "antonio")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return td
+	}
+	mk("Undated", time.Time{}, false)
+	soon := mk("Soon", time.Date(2026, 11, 20, 9, 0, 0, 0, la), false)
+	mk("All day", time.Date(2026, 11, 19, 0, 0, 0, 0, la), true)
+	if _, err := e.svc.SaveToDo(ctx, ToDo{Calendar: cal, Summary: "  "}, now, "antonio"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty title: %v", err)
+	}
+
+	list, problems, err := e.svc.ToDos([]Calendar{cal})
+	if err != nil || len(problems) > 0 {
+		t.Fatal(err, problems)
+	}
+	var got []string
+	for _, td := range list {
+		got = append(got, td.Summary)
+	}
+	if strings.Join(got, ",") != "All day,Soon,Imported,Undated" {
+		t.Fatalf("order: %v", got)
+	}
+	if !list[0].DueAllDay || strings.Join(list[2].Categories, "|") != "MVP Bread|blocked" || list[2].Priority != 2 {
+		t.Fatalf("fields: %+v / %+v", list[0], list[2])
+	}
+
+	// Ticking done keeps what the UI doesn't edit.
+	imp := list[2]
+	done, err := e.svc.SetToDoDone(ctx, cal, imp.Name, imp.ETag, true, now, "antonio")
+	if err != nil || !done.Done || !done.Completed.Equal(now) {
+		t.Fatalf("done: %+v %v", done, err)
+	}
+	raw := gitOut(t, "--git-dir", e.remote, "show", "main:calendar/antonio/personal/"+imp.Name)
+	for _, want := range []string{"STATUS:COMPLETED", "COMPLETED:20261118T120000Z", "BEGIN:VALARM", "RELATED-TO;RELTYPE=DEPENDS-ON:imp-0", "X-APPLE-SORT-ORDER:42"} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("after done, missing %q:\n%s", want, raw)
+		}
+	}
+	if msg := gitOut(t, "--git-dir", e.remote, "log", "-1", "--format=%s", "main"); msg != `Calendar: update task "Imported" (antonio/personal)` {
+		t.Errorf("commit: %q", msg)
+	}
+	// A stale ETag is refused (someone changed it meanwhile).
+	if _, err := e.svc.SetToDoDone(ctx, cal, imp.Name, imp.ETag, false, now, "antonio"); !errors.Is(err, ErrPrecondition) {
+		t.Fatalf("stale etag: %v", err)
+	}
+	open, err := e.svc.SetToDoDone(ctx, cal, imp.Name, done.ETag, false, now, "antonio")
+	if err != nil || open.Done {
+		t.Fatalf("undo: %+v %v", open, err)
+	}
+	raw = gitOut(t, "--git-dir", e.remote, "show", "main:calendar/antonio/personal/"+imp.Name)
+	if strings.Contains(raw, "COMPLETED:") || !strings.Contains(raw, "STATUS:NEEDS-ACTION") {
+		t.Errorf("after undo:\n%s", raw)
+	}
+
+	// Edit: clear the due date, change tags and notes.
+	soon.Due, soon.Categories, soon.Description = time.Time{}, []string{"Crush"}, "Line one\nLine two"
+	edited, err := e.svc.SaveToDo(ctx, soon, now, "antonio")
+	if err != nil || !edited.Due.IsZero() || edited.Description != "Line one\nLine two" || strings.Join(edited.Categories, ",") != "Crush" {
+		t.Fatalf("edit: %+v %v", edited, err)
+	}
+	if !(ToDo{Due: time.Date(2026, 11, 17, 0, 0, 0, 0, la), DueAllDay: true}).Overdue(now) || (ToDo{Due: time.Date(2026, 11, 18, 0, 0, 0, 0, la), DueAllDay: true}).Overdue(now) {
+		t.Error("overdue for all-day tasks")
 	}
 }

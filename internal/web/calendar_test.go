@@ -83,9 +83,17 @@ func TestCalendarUI(t *testing.T) {
 	if code != 200 || !strings.Contains(body, "2 added, 0 updated, 0 unchanged, 0 skipped") || !strings.Contains(body, "Imported, committed and pushed.") {
 		t.Fatalf("import: %d\n%s", code, body)
 	}
-	// The event list links the transcript; the import relinked it.
-	if !strings.Contains(body, "Acme &lt;&gt; Melzi") || !strings.Contains(body, `href="/transcripts/`+id+`"`) {
-		t.Errorf("event list misses the linked transcript:\n%s", body)
+	// The agenda links the transcript; the import relinked it.
+	_, body, _ = ant.do(t, "GET", "/agenda?week=2026-11-14", nil)
+	if !strings.Contains(body, "Sat 14 Nov") || !strings.Contains(body, "Acme &lt;&gt; Melzi") || !strings.Contains(body, `href="/transcripts/`+id+`"`) {
+		t.Errorf("agenda misses the linked transcript:\n%s", body)
+	}
+	// Maxim's own calendars don't have it; everyone's do.
+	if _, body, _ = max.do(t, "GET", "/agenda?week=2026-11-14", nil); strings.Contains(body, "Acme &lt;&gt; Melzi") {
+		t.Error("maxim's agenda shows antonio's event")
+	}
+	if _, body, _ = max.do(t, "GET", "/agenda?week=2026-11-14&who=all", nil); !strings.Contains(body, "Acme &lt;&gt; Melzi") || !strings.Contains(body, "Personal (antonio)") {
+		t.Errorf("everyone's agenda:\n%s", body)
 	}
 	if code, body = upload(t, ant, "personal", "not a calendar"); code != http.StatusUnprocessableEntity {
 		t.Errorf("bad file: %d", code)

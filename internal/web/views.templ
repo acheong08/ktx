@@ -24,6 +24,10 @@ templ layout(title string, c chrome) {
 					if c.Notes {
 						<a href="/notes" class={ templ.KV("active", c.Nav == "notes") }>Notes</a>
 					}
+					if c.Agenda {
+						<a href="/agenda" class={ templ.KV("active", c.Nav == "agenda") }>Calendar</a>
+						<a href="/tasks" class={ templ.KV("active", c.Nav == "tasks") }>Tasks</a>
+					}
 					if c.HasSettings() {
 						<a href="/settings" class={ templ.KV("active", c.InSettings()) }>Settings</a>
 					}

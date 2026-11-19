@@ -135,6 +135,13 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("POST /transcripts/{id}/event", u.page(u.setEvent))
 	}
 	if u.auth != nil && u.cal != nil {
+		mux.HandleFunc("GET /agenda", u.page(u.agendaPage)) // not /calendar: that was a cached 301 to Settings
+		mux.HandleFunc("GET /tasks", u.page(u.tasksPage))
+		mux.HandleFunc("POST /tasks", u.page(u.createTask))
+		mux.HandleFunc("GET /tasks/{owner}/{cal}/{name}", u.page(u.taskPage))
+		mux.HandleFunc("POST /tasks/{owner}/{cal}/{name}", u.page(u.saveTask))
+		mux.HandleFunc("POST /tasks/{owner}/{cal}/{name}/done", u.page(u.toggleTask))
+		mux.HandleFunc("POST /tasks/{owner}/{cal}/{name}/delete", u.page(u.deleteTask))
 		mux.HandleFunc("GET /settings/calendar", u.page(u.calendarPage))
 		mux.HandleFunc("POST /settings/calendar", u.page(u.createCalendar))
 		mux.HandleFunc("POST /settings/calendar/import", u.page(u.importCalendar))
@@ -271,6 +278,7 @@ type chrome struct {
 	AI          bool
 	Notes       bool
 	Labels      bool
+	Agenda      bool // the Calendar and Tasks pages
 	Nav         string // active section
 }
 
@@ -294,6 +302,7 @@ func (u *UI) chrome(r *http.Request, nav string) chrome {
 		c.Calendar = u.cal != nil
 		c.AI = u.ai != nil
 		c.Labels = u.notes != nil
+		c.Agenda = u.cal != nil && u.auth != nil
 	}
 	return c
 }

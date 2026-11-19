@@ -219,3 +219,35 @@ form.meaning textarea, #label-description { font-family: inherit; font-size: 14p
   form.meaning textarea, #label-description { font-size: 16px; }
 }
 form.meaning textarea { width: 100%; justify-self: stretch; }
+
+/* Calendar (agenda) */
+.pagehead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; margin-bottom: .75rem; }
+.pagehead h1 { margin: 0; }
+.weeknav { display: flex; gap: .35rem; }
+section.day { margin: 0 0 1rem; }
+section.day h2 { font-size: 15px; margin: 0 0 .35rem; padding-bottom: .25rem; border-bottom: 1px solid var(--line); }
+section.day.today h2 { color: var(--accent, inherit); }
+section.day > p.muted { margin: .25rem 0 .75rem; font-size: 14px; }
+ul.agenda { list-style: none; padding: 0; margin: 0; }
+ul.agenda li { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: .75rem; padding: .45rem 0; border-bottom: 1px solid var(--soft); }
+ul.agenda .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+ul.agenda .what { overflow-wrap: anywhere; }
+
+/* Tasks */
+form.addtask { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 0 0 1rem; }
+form.addtask input[name=title] { flex: 1 1 16rem; min-width: 0; }
+form.addtask .due { display: flex; align-items: center; gap: .35rem; color: var(--muted); font-weight: normal; }
+ul.tasks { list-style: none; padding: 0; margin: 0; }
+ul.tasks li { display: flex; gap: .6rem; align-items: flex-start; padding: .5rem 0; border-bottom: 1px solid var(--soft); }
+ul.tasks li form { margin: 0; }
+ul.tasks input[type=checkbox] { width: 1.1rem; height: 1.1rem; margin-top: .15rem; }
+ul.tasks .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+ul.tasks .sub { display: flex; flex-wrap: wrap; gap: .25rem .5rem; align-items: center; margin-top: .15rem; }
+ul.tasks li.done .what > a { color: var(--muted); text-decoration: line-through; }
+.due.late { color: var(--err); font-weight: 600; }
+pre.notes { white-space: pre-wrap; font-family: inherit; }
+@media (max-width: 640px) {
+  ul.agenda li { grid-template-columns: minmax(0, 1fr); gap: .1rem; }
+  form.addtask .due { flex: 1 1 100%; }
+  form.addtask .due input { flex: 1; min-width: 0; }
+}

@@ -41,8 +41,6 @@ type calendarView struct {
 	Owner     string
 	Calendars []calRow
 	Mine      []calendar.Calendar
-	Events    []occRow
-	Problems  []string
 	DAVURL    string
 	Report    *calendar.ImportReport
 	Into      string
@@ -84,38 +82,6 @@ func (u *UI) calendarView(r *http.Request) (calendarView, error) {
 	}
 	sort.SliceStable(v.Calendars, func(i, j int) bool { return v.Calendars[i].Mine && !v.Calendars[j].Mine })
 
-	now := time.Now()
-	from, to := now.AddDate(0, 0, -7), now.AddDate(0, 0, 14)
-	occs, problems, err := u.cal.Occurrences(cals, from, to)
-	if err != nil {
-		return v, err
-	}
-	v.Problems = problems
-	linked := map[string][]store.Entry{}
-	entries, err := u.store.List()
-	if err != nil {
-		return v, err
-	}
-	for _, e := range entries {
-		if l := e.Meta.CalendarEvent; l != nil && l.UID != "" {
-			linked[linkKey(l.UID, l.RecurrenceID)] = append(linked[linkKey(l.UID, l.RecurrenceID)], e)
-		}
-	}
-	for _, o := range occs {
-		local := o.Start.In(calendar.DefaultZone())
-		row := occRow{Occ: o, Day: local.Format("Mon 2 Jan"), Guests: o.Guests()}
-		if o.AllDay {
-			row.Time = "all day"
-		} else {
-			row.Time = local.Format("15:04") + "–" + o.End.In(calendar.DefaultZone()).Format("15:04")
-		}
-		rid := ""
-		if o.Recurring() {
-			rid = o.RecurrenceID.Format(time.RFC3339)
-		}
-		row.Transcripts = linked[linkKey(o.UID, rid)]
-		v.Events = append(v.Events, row)
-	}
 	return v, nil
 }
 

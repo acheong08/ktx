@@ -104,42 +104,7 @@ templ calendarPage(v calendarView) {
 			<li><strong>iPhone:</strong> Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add CalDAV Account. Server <code>{ strings.TrimSuffix(strings.TrimPrefix(v.DAVURL, "https://"), "/dav/") }</code>.</li>
 			<li><strong>Thunderbird:</strong> New Calendar → On the Network. Location <code>{ v.DAVURL }</code>, then pick the calendars to show.</li>
 		</ul>
-		<h2>Last 7 days and next 14</h2>
-		if len(v.Problems) > 0 {
-			<div class="flash warn">
-				Some events can't be read:
-				<ul>
-					for _, p := range v.Problems {
-						<li>{ p }</li>
-					}
-				</ul>
-			</div>
-		}
-		if len(v.Events) == 0 {
-			<p class="muted">No events in this period.</p>
-		} else {
-			<table class="list">
-				<thead>
-					<tr><th>Day</th><th>Time</th><th>Event</th><th>Guests</th><th>Calendar</th><th>Transcript</th></tr>
-				</thead>
-				<tbody>
-					for _, e := range v.Events {
-						<tr>
-							<td data-label="Day">{ e.Day }</td>
-							<td data-label="Time">{ e.Time }</td>
-							<td data-label="Event">{ e.Occ.Summary }</td>
-							<td data-label="Guests">{ guestList(e.Guests) }</td>
-							<td data-label="Calendar">{ e.Occ.Calendar }</td>
-							<td data-label="Transcript">
-								for _, t := range e.Transcripts {
-									<a href={ templ.URL("/transcripts/" + t.ID) }>{ t.Label() }</a>
-								}
-							</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-		}
+		<p>Events and tasks are on the <a href="/agenda">Calendar</a> and <a href="/tasks">Tasks</a> pages.</p>
 	}
 }
 

@@ -1,0 +1,215 @@
+package web
+
+import "strconv"
+
+templ agendaPage(v agendaView) {
+	@layout("Calendar", v.Chrome) {
+		<div class="pagehead">
+			<h1>{ v.Title }</h1>
+			<nav class="weeknav" aria-label="Weeks">
+				<a class="button" href={ templ.URL(v.Prev) } aria-label="Previous week">←</a>
+				<a class="button" href={ templ.URL(v.Today) }>This week</a>
+				<a class="button" href={ templ.URL(v.Next) } aria-label="Next week">→</a>
+			</nav>
+		</div>
+		<nav class="tabs" aria-label="Whose calendars">
+			<a href={ templ.URL(weekURLFrom(v.Today, false)) } class={ "tab", templ.KV("active", !v.All) }>Mine</a>
+			<a href={ templ.URL(weekURLFrom(v.Today, true)) } class={ "tab", templ.KV("active", v.All) }>Everyone</a>
+		</nav>
+		if len(v.Problems) > 0 {
+			<div class="flash warn">
+				Some events can't be read:
+				<ul>
+					for _, p := range v.Problems {
+						<li>{ p }</li>
+					}
+				</ul>
+			</div>
+		}
+		for _, d := range v.Days {
+			<section class={ "day", templ.KV("today", d.Today) }>
+				<h2>
+					{ d.Label }
+					if d.Today {
+						<span class="badge">today</span>
+					}
+				</h2>
+				if len(d.Events) == 0 {
+					<p class="muted">Nothing.</p>
+				} else {
+					<ul class="agenda">
+						for _, e := range d.Events {
+							<li>
+								<span class="when">{ e.Time }</span>
+								<div class="what">
+									<strong>{ e.Occ.Summary }</strong>
+									<div class="sub">
+										{ v.Names[e.Occ.Calendar] }
+										if e.Occ.Location != "" {
+											· { e.Occ.Location }
+										}
+									</div>
+									if len(e.Guests) > 0 {
+										<div class="sub">{ guestList(e.Guests) }</div>
+									}
+									for _, t := range e.Transcripts {
+										<div><a href={ templ.URL("/transcripts/" + t.ID) }>Transcript: { t.Label() }</a></div>
+									}
+								</div>
+							</li>
+						}
+					</ul>
+				}
+			</section>
+		}
+		<p class="muted">Calendars are managed in <a href="/settings/calendar">Settings → Calendar</a>.</p>
+	}
+}
+
+templ tasksPage(v tasksView) {
+	@layout("Tasks", v.Chrome) {
+		<h1>Tasks</h1>
+		<form method="post" action="/tasks" class="addtask">
+			<input name="title" type="text" value={ v.Title } placeholder="New task" aria-label="New task" required autofocus autocomplete="off"/>
+			<label class="due">
+				<span>Due</span>
+				<input name="due_date" type="date" value={ v.DueDate } aria-label="Due date (optional)"/>
+				<input name="due_time" type="time" value={ v.DueTime } aria-label="Due time (optional)"/>
+			</label>
+			if len(v.Mine) > 1 {
+				<select name="calendar" aria-label="Calendar">
+					for _, c := range v.Mine {
+						<option value={ c.ID } selected?={ c.ID == v.Into || (v.Into == "" && c.ID == DefaultCalendarID) }>{ c.Title() }</option>
+					}
+				</select>
+			}
+			<button type="submit" class="primary">Add</button>
+		</form>
+		@taskList(v)
+	}
+}
+
+templ taskList(v tasksView) {
+	<div id="tasks">
+		<nav class="tabs" aria-label="Whose tasks">
+			<a href={ templ.URL(tasksURL(false, v.ShowDone)) } class={ "tab", templ.KV("active", !v.All) }>Mine</a>
+			<a href={ templ.URL(tasksURL(true, v.ShowDone)) } class={ "tab", templ.KV("active", v.All) }>Everyone</a>
+			<a class="sort-next" href={ templ.URL(tasksURL(v.All, !v.ShowDone)) }>
+				if v.ShowDone {
+					Hide done
+				} else {
+					Show done ({ strconv.Itoa(v.DoneN) })
+				}
+			</a>
+		</nav>
+		@flashBox(v.Flash)
+		if len(v.Problems) > 0 {
+			<div class="flash warn">
+				Some tasks can't be read:
+				<ul>
+					for _, p := range v.Problems {
+						<li>{ p }</li>
+					}
+				</ul>
+			</div>
+		}
+		if len(v.Rows) == 0 {
+			<p class="empty">
+				if v.DoneN > 0 && !v.ShowDone {
+					All done.
+				} else {
+					No tasks.
+				}
+			</p>
+		} else {
+			<ul class="tasks">
+				for _, r := range v.Rows {
+					<li class={ templ.KV("done", r.T.Done), templ.KV("overdue", r.Overdue) }>
+						if r.Mine {
+							<form method="post" action={ templ.URL(r.URL + "/done") } hx-post={ r.URL + "/done" } hx-target="#tasks" hx-swap="outerHTML" hx-trigger="change">
+								<input type="hidden" name="etag" value={ r.T.ETag }/>
+								<input type="hidden" name="done" value={ doneValue(!r.T.Done) }/>
+								if v.All {
+									<input type="hidden" name="who" value="all"/>
+								}
+								if v.ShowDone {
+									<input type="hidden" name="show_done" value="1"/>
+								}
+								<input type="checkbox" checked?={ r.T.Done } aria-label={ "Done: " + r.T.Summary }/>
+								<noscript><button type="submit">Done</button></noscript>
+							</form>
+						} else {
+							<input type="checkbox" checked?={ r.T.Done } disabled aria-label={ "Done: " + r.T.Summary }/>
+						}
+						<div class="what">
+							<a href={ templ.URL(r.URL) }>{ r.T.Summary }</a>
+							<div class="sub">
+								if r.Due != "" {
+									<span class={ "due", templ.KV("late", r.Overdue) }>{ r.Due }</span>
+								}
+								if r.T.Repeats {
+									<span class="badge">repeats</span>
+								}
+								for _, c := range r.T.Categories {
+									<span class="label">{ c }</span>
+								}
+								if !r.Mine {
+									<span class="muted">{ r.T.Calendar.Owner }</span>
+								}
+							</div>
+						</div>
+					</li>
+				}
+			</ul>
+		}
+	</div>
+}
+
+templ taskPage(v taskFormView) {
+	@layout(v.T.Summary, v.Chrome) {
+		<p class="back"><a href="/tasks">← Tasks</a></p>
+		if !v.Mine {
+			<h1>{ v.T.Summary }</h1>
+			<p class="sub">{ v.T.Calendar.Owner }'s task · { v.T.Calendar.Title() }</p>
+			if v.DueDate != "" {
+				<p>Due { v.DueDate } { v.DueTime }</p>
+			}
+			if v.T.Description != "" {
+				<pre class="notes">{ v.T.Description }</pre>
+			}
+		} else {
+			<h1>Edit task</h1>
+			@flashBox(v.Flash)
+			<form method="post" action={ templ.URL(v.URL) } class="settings wide">
+				<input type="hidden" name="etag" value={ v.T.ETag }/>
+				<label for="title">Title</label>
+				<input id="title" name="title" type="text" value={ v.Title } required/>
+				<div class="row">
+					<div>
+						<label for="due_date">Due date</label>
+						<input id="due_date" name="due_date" type="date" value={ v.DueDate }/>
+					</div>
+					<div>
+						<label for="due_time">Time (optional)</label>
+						<input id="due_time" name="due_time" type="time" value={ v.DueTime }/>
+					</div>
+				</div>
+				<label for="tags">Tags</label>
+				<input id="tags" name="tags" type="text" value={ v.Tags } placeholder="Comma-separated, e.g. MVP Bread, blocked"/>
+				<label for="notes">Notes</label>
+				<textarea id="notes" name="notes" rows="12">{ v.Notes }</textarea>
+				<label class="check"><input type="checkbox" name="done" value="1" checked?={ v.Done }/> Done</label>
+				if v.T.Repeats {
+					<p class="help">This task repeats. Ticking it done here marks it done; it isn't moved to the next date.</p>
+				}
+				<p class="help">In { v.T.Calendar.Title() }, so it shows in your calendar apps too.</p>
+				<button type="submit" class="primary">Save</button>
+			</form>
+			<form method="post" class="danger" action={ templ.URL(v.URL + "/delete") }>
+				<input type="hidden" name="etag" value={ v.T.ETag }/>
+				<label class="check"><input type="checkbox" name="confirm" required/> Delete this task. It stays in git history.</label>
+				<button type="submit">Delete</button>
+			</form>
+		}
+	}
+}
