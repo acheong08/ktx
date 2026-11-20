@@ -158,10 +158,11 @@ func NormalizeURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// Subscribe adds a subscribed calendar owner/id named name, or gives an
-// existing subscription a new URL. The feed is fetched first, so a link
+// Subscribe adds a subscribed calendar owner/id named name, shown as part
+// of the owner's calendar mergeInto ("" for a calendar of its own), or
+// gives an existing subscription a new URL (keeping how it's shown). The feed is fetched first, so a link
 // that doesn't work is refused and nothing is created.
-func (m *Manager) Subscribe(ctx context.Context, owner, id, name, rawURL, user string) error {
+func (m *Manager) Subscribe(ctx context.Context, owner, id, name, rawURL, mergeInto, user string) error {
 	if m.box == nil {
 		return ErrNoKey
 	}
@@ -172,11 +173,8 @@ func (m *Manager) Subscribe(ctx context.Context, owner, id, name, rawURL, user s
 	if !calendar.ValidID(id) {
 		return fmt.Errorf("%w: calendar ids are lowercase letters, digits, '-' and '_'", calendar.ErrInvalid)
 	}
-	c := calendar.Calendar{Owner: owner, ID: id, Name: strings.TrimSpace(name), Subscription: &calendar.Subscription{}}
-	if old, err := m.cal.Calendar(owner, id); err == nil {
-		if !old.Subscribed() {
-			return fmt.Errorf("%w: you already have a calendar called %s", calendar.ErrExists, id)
-		}
+	c := calendar.Calendar{Owner: owner, ID: id, Name: strings.TrimSpace(name), Subscription: &calendar.Subscription{MergeInto: mergeInto}}
+	if old, err := m.subscription(owner, id); err == nil {
 		c.Subscription = old.Subscription
 		if c.Name == "" {
 			c.Name = old.Name
@@ -184,6 +182,11 @@ func (m *Manager) Subscribe(ctx context.Context, owner, id, name, rawURL, user s
 	}
 	if c.Name == "" {
 		c.Name = u.Hostname()
+	}
+	if _, err := m.subscription(owner, id); errors.Is(err, calendar.ErrNotFound) {
+		if _, err := m.cal.Calendar(owner, id); err == nil {
+			return fmt.Errorf("%w: you already have a calendar called %s", calendar.ErrExists, id)
+		}
 	}
 	data, etag, lastMod, err := m.download(ctx, u, state.Subscription{})
 	if err != nil {
@@ -211,15 +214,39 @@ func (m *Manager) Subscribe(ctx context.Context, owner, id, name, rawURL, user s
 	return nil
 }
 
+// subscription finds owner's subscribed calendar id (merged or not).
+func (m *Manager) subscription(owner, id string) (calendar.Calendar, error) {
+	subs, err := m.cal.Subscriptions()
+	if err != nil {
+		return calendar.Calendar{}, err
+	}
+	for _, c := range subs {
+		if c.Owner == owner && c.ID == id {
+			return c, nil
+		}
+	}
+	return calendar.Calendar{}, calendar.ErrNotFound
+}
+
+// SetMerge shows a subscription as part of the owner's calendar into, or
+// ("" ) as a calendar of its own. Transcripts are relinked in the same commit.
+func (m *Manager) SetMerge(ctx context.Context, owner, id, into, user string) error {
+	c, err := m.subscription(owner, id)
+	if err != nil {
+		return err
+	}
+	sub := *c.Subscription
+	sub.MergeInto = into
+	c.Subscription = &sub
+	return m.cal.SetSubscription(ctx, c, user)
+}
+
 // Refresh fetches one subscription now. It reports whether the feed
 // changed; transcripts are relinked if so.
 func (m *Manager) Refresh(ctx context.Context, owner, id string) (bool, error) {
-	c, err := m.cal.Calendar(owner, id)
+	c, err := m.subscription(owner, id)
 	if err != nil {
 		return false, err
-	}
-	if !c.Subscribed() {
-		return false, fmt.Errorf("%w: %s isn't a subscription", calendar.ErrInvalid, c.Key())
 	}
 	sub, err := m.db.Subscription(owner, id)
 	if err != nil {
@@ -235,7 +262,7 @@ func (m *Manager) Refresh(ctx context.Context, owner, id string) (bool, error) {
 // Unsubscribe removes a subscribed calendar: from git, its URL, and its
 // cached feed. Links from transcripts to its events are re-matched.
 func (m *Manager) Unsubscribe(ctx context.Context, owner, id, user string) error {
-	c, err := m.cal.Calendar(owner, id)
+	c, err := m.subscription(owner, id)
 	if err != nil {
 		return err
 	}

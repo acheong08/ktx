@@ -64,6 +64,8 @@ type Calendar struct {
 	Description string `json:"description,omitempty"`
 	// Subscription is set for a calendar that shows an iCal feed (read-only).
 	Subscription *Subscription `json:"subscription,omitempty"`
+
+	merged []Calendar // subscriptions shown as part of this calendar
 }
 
 // Key is "<owner>/<id>".
@@ -87,6 +89,7 @@ type Object struct {
 	ETag    string
 	ModTime time.Time
 	Raw     []byte
+	Feed    string // "<owner>/<id>" of the subscription it comes from, if merged in (read-only)
 }
 
 // Decode parses the object's iCalendar data.
@@ -94,7 +97,8 @@ func (o Object) Decode() (*ical.Calendar, error) {
 	return ical.NewDecoder(bytes.NewReader(o.Raw)).Decode()
 }
 
-// ListCalendars returns every calendar of every owner, sorted.
+// ListCalendars returns every calendar of every owner, sorted. Subscriptions
+// merged into another calendar aren't listed (see Subscriptions).
 func ListCalendars(root string) ([]Calendar, error) {
 	owners, err := os.ReadDir(filepath.Join(root, Root))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -120,6 +124,11 @@ func ListCalendars(root string) ([]Calendar, error) {
 			if err != nil {
 				return nil, err
 			}
+			if into := cal.MergedInto(); into != "" {
+				if t, err := readCalendar(root, o.Name(), into); err == nil && !t.Subscribed() {
+					continue // shown as part of that calendar
+				}
+			}
 			out = append(out, cal)
 		}
 	}
@@ -127,8 +136,53 @@ func ListCalendars(root string) ([]Calendar, error) {
 	return out, nil
 }
 
-// GetCalendar reads one calendar's metadata.
+// GetCalendar reads one calendar's metadata, with the subscriptions merged
+// into it.
 func GetCalendar(root, owner, id string) (Calendar, error) {
+	c, err := readCalendar(root, owner, id)
+	if err != nil || c.Subscribed() {
+		return c, err
+	}
+	c.merged, err = mergedFeeds(root, owner, id)
+	return c, err
+}
+
+// Subscriptions lists every subscribed calendar, merged ones included.
+func Subscriptions(root string) ([]Calendar, error) {
+	owners, err := os.ReadDir(filepath.Join(root, Root))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Calendar
+	for _, o := range owners {
+		if !o.IsDir() || !ValidID(o.Name()) {
+			continue
+		}
+		cals, err := os.ReadDir(filepath.Join(root, Root, o.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range cals {
+			if !d.IsDir() || !ValidID(d.Name()) {
+				continue
+			}
+			c, err := readCalendar(root, o.Name(), d.Name())
+			if err != nil {
+				return nil, err
+			}
+			if c.Subscribed() {
+				out = append(out, c)
+			}
+		}
+	}
+	return out, nil
+}
+
+// readCalendar reads a calendar.json.
+func readCalendar(root, owner, id string) (Calendar, error) {
 	if !ValidID(owner) || !ValidID(id) {
 		return Calendar{}, ErrNotFound
 	}
@@ -193,11 +247,21 @@ func UpdateCalendar(root string, c Calendar) ([]string, error) {
 }
 
 // ListObjects reads every event file of a calendar, by name. For a
-// subscribed calendar, they come from the cached feed.
+// subscribed calendar, they come from the cached feed; a calendar with
+// feeds merged into it gets their objects too (read-only, Feed set).
 func ListObjects(root string, c Calendar) ([]Object, error) {
 	if c.Subscribed() {
 		return feedObjects(c)
 	}
+	own, err := gitObjects(root, c)
+	if err != nil {
+		return nil, err
+	}
+	return withFeeds(c, own)
+}
+
+// gitObjects reads a calendar's own files.
+func gitObjects(root string, c Calendar) ([]Object, error) {
 	dir := filepath.Join(root, filepath.FromSlash(c.Dir()))
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -237,7 +301,19 @@ func GetObject(root string, c Calendar, name string) (Object, error) {
 		}
 		return Object{}, ErrNotFound
 	}
-	return readObject(root, path.Join(c.Dir(), name))
+	o, err := readObject(root, path.Join(c.Dir(), name))
+	if errors.Is(err, ErrNotFound) && len(c.merged) > 0 {
+		objs, ferr := withFeeds(c, nil)
+		if ferr != nil {
+			return Object{}, ferr
+		}
+		for _, fo := range objs {
+			if fo.Name == name {
+				return fo, nil
+			}
+		}
+	}
+	return o, err
 }
 
 // PutOptions are the conditions of a write (HTTP If-Match / If-None-Match).
@@ -256,6 +332,8 @@ func PutObject(root string, c Calendar, name string, data *ical.Calendar, opt Pu
 	if cur, err := GetCalendar(root, c.Owner, c.ID); err != nil {
 		return Object{}, false, nil, err
 	} else if cur.Subscribed() {
+		return Object{}, false, nil, ErrReadOnly
+	} else if o, err := GetObject(root, cur, name); err == nil && o.Feed != "" {
 		return Object{}, false, nil, ErrReadOnly
 	}
 	uid, err := checkObject(data)
@@ -297,6 +375,10 @@ func PutObject(root string, c Calendar, name string, data *ical.Calendar, opt Pu
 func DeleteObject(root string, c Calendar, name, ifMatch string) ([]string, error) {
 	if cur, err := GetCalendar(root, c.Owner, c.ID); err == nil && cur.Subscribed() {
 		return nil, ErrReadOnly
+	} else if err == nil {
+		if o, err := GetObject(root, cur, name); err == nil && o.Feed != "" {
+			return nil, ErrReadOnly
+		}
 	}
 	o, err := GetObject(root, c, name)
 	if err != nil {
@@ -347,7 +429,7 @@ func checkObject(data *ical.Calendar) (string, error) {
 
 // findUID returns the file name in c holding uid, or "".
 func findUID(root string, c Calendar, uid string) (string, error) {
-	objs, err := ListObjects(root, c)
+	objs, err := gitObjects(root, c) // a feed copy of the UID doesn't stop a git copy
 	if err != nil {
 		return "", err
 	}

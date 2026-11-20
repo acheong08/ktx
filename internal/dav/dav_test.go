@@ -474,3 +474,44 @@ func TestSubscribedCalendarReadOnly(t *testing.T) {
 		t.Fatalf("read-only: %v", ro)
 	}
 }
+
+func TestMergedSubscriptionOverCalDAV(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	calendar.SetFeedDir(dir)
+	t.Cleanup(func() { calendar.SetFeedDir("") })
+	sub := calendar.Calendar{Owner: "antonio", ID: "luma", Name: "Luma", Subscription: &calendar.Subscription{MergeInto: "work"}}
+	if err := e.svc.SetSubscription(ctx, sub, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	feed := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:evt-1@events.lu.ma\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:20261124T020000Z\r\nDTEND:20261124T030000Z\r\nSUMMARY:AI Night\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	os.MkdirAll(filepath.Join(dir, "antonio"), 0o700)
+	os.WriteFile(filepath.Join(dir, "antonio", "luma.ics"), []byte(feed), 0o600)
+
+	c := e.client(t, "antonio", e.antonioTok)
+	cals, err := c.FindCalendars(ctx, Prefix+"/antonio/calendars/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cal := range cals {
+		if strings.Contains(cal.Path, "luma") {
+			t.Fatalf("merged subscription listed: %s", cal.Path)
+		}
+	}
+	work := Prefix + "/antonio/calendars/work/"
+	objs, err := c.QueryCalendar(ctx, work, &caldav.CalendarQuery{
+		CompRequest: caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true},
+		CompFilter:  caldav.CompFilter{Name: "VCALENDAR", Comps: []caldav.CompFilter{{Name: "VEVENT"}}},
+	})
+	if err != nil || len(objs) != 1 {
+		t.Fatalf("work: %d %v", len(objs), err)
+	}
+	if _, err := c.PutCalendarObject(ctx, objs[0].Path, objs[0].Data, nil); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("edit feed event: %v", err)
+	}
+	// My own events in Work still work.
+	if _, err := c.PutCalendarObject(ctx, work+"mine.ics", event("mine", "Mine", time.Now()), nil); err != nil {
+		t.Fatal(err)
+	}
+}

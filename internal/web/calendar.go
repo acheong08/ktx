@@ -55,6 +55,25 @@ type calendarView struct {
 	CanSeal   bool   // there's a master key for feed URLs
 	SubName   string // the subscribe form, kept on error
 	SubURL    string
+	SubInto   string
+	Subs      []subRow // my subscriptions, merged or not
+}
+
+type subRow struct {
+	Cal  calendar.Calendar
+	Feed feeds.Status
+	Into string // title of the calendar it's merged into, "" when it's its own
+}
+
+// mergedNames are the titles of my subscriptions merged into calendar id.
+func (v calendarView) mergedNames(id string) []string {
+	var out []string
+	for _, s := range v.Subs {
+		if s.Cal.MergedInto() == id && s.Into != "" {
+			out = append(out, s.Cal.Title())
+		}
+	}
+	return out
 }
 
 func davURL(r *http.Request) string { return "https://" + r.Host + "/dav/" }
@@ -94,6 +113,25 @@ func (u *UI) calendarView(r *http.Request) (calendarView, error) {
 	}
 	v.Feeds = u.feeds != nil
 	v.CanSeal = v.Feeds && u.feeds.CanStoreURLs()
+	v.SubInto = DefaultCalendarID
+	if v.Feeds {
+		subs, err := u.cal.Subscriptions()
+		if err != nil {
+			return v, err
+		}
+		for _, c := range subs {
+			if c.Owner != owner {
+				continue
+			}
+			row := subRow{Cal: c, Feed: u.feeds.Status(c)}
+			for _, m := range v.Mine {
+				if m.ID == c.MergedInto() {
+					row.Into = m.Title()
+				}
+			}
+			v.Subs = append(v.Subs, row)
+		}
+	}
 	sort.SliceStable(v.Calendars, func(i, j int) bool { return v.Calendars[i].Mine && !v.Calendars[j].Mine })
 
 	return v, nil
@@ -359,12 +397,13 @@ func (u *UI) subscribe(w http.ResponseWriter, r *http.Request) {
 	owner := calendarOwner(user)
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	name, link, id := strings.TrimSpace(r.PostFormValue("name")), strings.TrimSpace(r.PostFormValue("url")), r.PostFormValue("id")
+	into := r.PostFormValue("into")
 	if id == "" {
 		id = u.freeCalendarID(owner, name)
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Minute)
 	defer cancel()
-	err := u.feeds.Subscribe(ctx, owner, id, name, link, actor(r))
+	err := u.feeds.Subscribe(ctx, owner, id, name, link, into, actor(r))
 	v, verr := u.calendarView(r)
 	if verr != nil {
 		u.fail(w, r, verr)
@@ -372,12 +411,18 @@ func (u *UI) subscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		u.log.Warn("subscribing failed", "calendar", owner+"/"+id, "err", err)
-		v.SubName, v.SubURL = name, link
+		v.SubName, v.SubURL, v.SubInto = name, link, into
 		v.Flash = flash{"error", "Couldn't subscribe: " + err.Error()}
 		u.render(w, r, http.StatusUnprocessableEntity, calendarPage(v))
 		return
 	}
-	v.Flash = flash{"ok", "Subscribed. Its events show in the agenda and your calendar apps (read-only), and are refreshed every 30 minutes."}
+	msg := "Subscribed. Its events show in the agenda and your calendar apps (read-only), and are refreshed every 30 minutes."
+	for _, s := range v.Subs {
+		if s.Cal.ID == id && s.Into != "" {
+			msg = "Subscribed. Its events show as part of " + s.Into + " (read-only there), refreshed every 30 minutes."
+		}
+	}
+	v.Flash = flash{"ok", msg}
 	u.render(w, r, http.StatusOK, calendarPage(v))
 }
 
@@ -394,6 +439,27 @@ func (u *UI) freeCalendarID(owner, name string) string {
 		}
 		id = base + "-" + strconv.Itoa(i)
 	}
+}
+
+// mergeSubscription shows a subscription as part of one of my calendars, or
+// as a calendar of its own.
+func (u *UI) mergeSubscription(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Minute)
+	defer cancel()
+	err := u.feeds.SetMerge(ctx, calendarOwner(user), r.PathValue("id"), r.PostFormValue("into"), actor(r))
+	v, verr := u.calendarView(r)
+	if verr != nil {
+		u.fail(w, r, verr)
+		return
+	}
+	if err != nil {
+		v.Flash = flash{"error", "Couldn't change it: " + err.Error()}
+		u.render(w, r, http.StatusUnprocessableEntity, calendarPage(v))
+		return
+	}
+	v.Flash = flash{"ok", "Saved. Calendar apps pick it up on their next refresh."}
+	u.render(w, r, http.StatusOK, calendarPage(v))
 }
 
 func (u *UI) refreshSubscription(w http.ResponseWriter, r *http.Request) {

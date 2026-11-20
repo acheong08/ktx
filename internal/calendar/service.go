@@ -183,6 +183,13 @@ func (s *Service) EnsureCalendar(ctx context.Context, owner, id, name string) er
 	return s.CreateCalendar(ctx, Calendar{Owner: owner, ID: id, Name: name}, owner)
 }
 
+// Subscriptions lists every subscribed calendar, merged ones included.
+func (s *Service) Subscriptions() ([]Calendar, error) {
+	var out []Calendar
+	err := s.repo.View(func(root string) (err error) { out, err = Subscriptions(root); return })
+	return out, err
+}
+
 // DeleteCalendar removes a subscribed calendar from git.
 func (s *Service) DeleteCalendar(ctx context.Context, c Calendar, user string) error {
 	_, err := s.update(ctx, user, func(root string) ([]string, string, error) {
@@ -210,6 +217,11 @@ func (s *Service) SetSubscription(ctx context.Context, c Calendar, user string) 
 		}
 		if !ValidID(c.Owner) || !ValidID(c.ID) {
 			return nil, "", fmt.Errorf("%w: calendar ids are lowercase letters, digits, '-' and '_'", ErrInvalid)
+		}
+		if into := c.MergedInto(); into != "" {
+			if t, err := readCalendar(root, c.Owner, into); err != nil || t.Subscribed() {
+				return nil, "", fmt.Errorf("%w: %s isn't a calendar of yours to merge into", ErrInvalid, into)
+			}
 		}
 		b, _ := json.MarshalIndent(c, "", "  ")
 		rel := path.Join(c.Dir(), metaFile)

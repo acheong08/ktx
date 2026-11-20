@@ -123,10 +123,10 @@ func TestSubscribeRefreshUnsubscribe(t *testing.T) {
 	ctx := context.Background()
 
 	// Bad links are refused and nothing is created.
-	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", "ftp://x/y", "antonio"); !errors.Is(err, calendar.ErrInvalid) {
+	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", "ftp://x/y", "", "antonio"); !errors.Is(err, calendar.ErrInvalid) {
 		t.Fatalf("ftp: %v", err)
 	}
-	err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", strings.Replace(f.url(), "sekret-token-123", "wrong", 1), "antonio")
+	err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", strings.Replace(f.url(), "sekret-token-123", "wrong", 1), "", "antonio")
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("forbidden: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestSubscribeRefreshUnsubscribe(t *testing.T) {
 	}
 
 	// webcal:// is read as https.
-	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", strings.Replace(f.url(), "https://", "webcal://", 1), "antonio"); err != nil {
+	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", strings.Replace(f.url(), "https://", "webcal://", 1), "", "antonio"); err != nil {
 		t.Fatal(err)
 	}
 	c, err := e.cal.Calendar("antonio", "luma")
@@ -259,7 +259,7 @@ func TestFeedDuplicatesAndLinking(t *testing.T) {
 	if _, err := e.st.Put(ctx, doc, "antonio"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", f.url(), "antonio"); err != nil {
+	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", f.url(), "", "antonio"); err != nil {
 		t.Fatal(err)
 	}
 	cals, _ := e.cal.Calendars()
@@ -281,7 +281,7 @@ func TestFeedDuplicatesAndLinking(t *testing.T) {
 func TestPrivateAddressesRefused(t *testing.T) {
 	f := newFeed(t, feedV1)
 	e := setup(t, nil) // the real client
-	err := e.m.Subscribe(context.Background(), "antonio", "luma", "Luma", f.url(), "antonio")
+	err := e.m.Subscribe(context.Background(), "antonio", "luma", "Luma", f.url(), "", "antonio")
 	if err == nil || !strings.Contains(err.Error(), "private address") || strings.Contains(err.Error(), "sekret") {
 		t.Fatalf("err = %v", err)
 	}
@@ -293,5 +293,89 @@ func TestPrivateAddressesRefused(t *testing.T) {
 		if got := Public(netip.MustParseAddr(addr)); got != want {
 			t.Errorf("Public(%s) = %v", addr, got)
 		}
+	}
+}
+
+func TestMergedSubscription(t *testing.T) {
+	f := newFeed(t, feedV1)
+	e := setup(t, f)
+	ctx := context.Background()
+	own := calendar.Calendar{Owner: "antonio", ID: "personal", Name: "Work"}
+	if err := e.cal.CreateCalendar(ctx, own, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	// AI Night was also accepted from its email invite: that copy is in git.
+	invite := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:evt-aaa@events.lu.ma\r\nDTSTAMP:20261101T000000Z\r\n" +
+		"DTSTART:20261124T020000Z\r\nDTEND:20261124T040000Z\r\nSUMMARY:AI Night (invite)\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	if _, _, err := e.cal.Import(ctx, own, strings.NewReader(invite), "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := transcript.Parse([]byte("---\ntitle: Dinner chat\ndate: 2026-11-25T02:05:00Z\nparticipants: [Antonio <antonio@melzi.dev>]\n---\nHi.\n"))
+	if _, err := e.st.Put(ctx, doc, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", f.url(), "nope", "antonio"); !errors.Is(err, calendar.ErrInvalid) {
+		t.Fatalf("merge into a missing calendar: %v", err)
+	}
+	if err := e.m.Subscribe(ctx, "antonio", "luma", "Luma", f.url(), "personal", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+
+	// One calendar: Work, with the feed's other event in it, read-only.
+	cals, _ := e.cal.Calendars()
+	if len(cals) != 1 || cals[0].ID != "personal" {
+		t.Fatalf("calendars: %+v", cals)
+	}
+	if subs, _ := e.cal.Subscriptions(); len(subs) != 1 || subs[0].MergedInto() != "personal" {
+		t.Fatalf("subscriptions: %+v", subs)
+	}
+	work := cals[0]
+	objs, _ := e.cal.Objects(work)
+	var feedObj calendar.Object
+	var got []string
+	for _, o := range objs {
+		cal, _ := o.Decode()
+		s, _ := cal.Children[0].Props.Text(ical.PropSummary)
+		got = append(got, s)
+		if o.Feed != "" {
+			feedObj = o
+		}
+	}
+	if strings.Join(got, ",") != "AI Night (invite),Founders dinner" || feedObj.Feed != "antonio/luma" {
+		t.Fatalf("work objects: %v %+v", got, feedObj.Feed)
+	}
+	if o, err := e.cal.Object(work, feedObj.Name); err != nil || o.Feed == "" {
+		t.Fatalf("get feed object: %v", err)
+	}
+	cal, _ := feedObj.Decode()
+	if _, _, err := e.cal.Put(ctx, work, feedObj.Name, cal, calendar.PutOptions{}, "antonio"); !errors.Is(err, calendar.ErrReadOnly) {
+		t.Fatalf("put over feed event: %v", err)
+	}
+	if err := e.cal.Delete(ctx, work, feedObj.Name, "", "antonio"); !errors.Is(err, calendar.ErrReadOnly) {
+		t.Fatalf("delete feed event: %v", err)
+	}
+	// The transcript links to the event in Work.
+	entry, _ := e.st.Get(doc.ID)
+	if l := entry.Meta.CalendarEvent; l == nil || l.Calendar != "antonio/personal" || l.UID != "evt-bbb@events.lu.ma" {
+		t.Fatalf("link: %+v", entry.Meta.CalendarEvent)
+	}
+	// Not in git.
+	if files := gitOut(t, "--git-dir", e.remote, "ls-tree", "-r", "--name-only", "main", "calendar/antonio"); strings.Contains(files, "evt-bbb") {
+		t.Fatalf("feed event in git: %s", files)
+	}
+
+	// Back to a calendar of its own: listed again, links follow.
+	if err := e.m.SetMerge(ctx, "antonio", "luma", "", "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	if cals, _ := e.cal.Calendars(); len(cals) != 2 {
+		t.Fatalf("calendars after unmerge: %+v", cals)
+	}
+	work, _ = e.cal.Calendar("antonio", "personal")
+	if objs, _ := e.cal.Objects(work); len(objs) != 1 {
+		t.Fatalf("work after unmerge: %d", len(objs))
+	}
+	if entry, _ = e.st.Get(doc.ID); entry.Meta.CalendarEvent == nil || entry.Meta.CalendarEvent.Calendar != "antonio/luma" {
+		t.Fatalf("link after unmerge: %+v", entry.Meta.CalendarEvent)
 	}
 }

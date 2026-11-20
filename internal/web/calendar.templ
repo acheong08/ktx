@@ -2,6 +2,8 @@ package web
 
 import (
 	"strconv"
+
+	"github.com/acheong08/ktx/internal/calendar"
 	"strings"
 )
 
@@ -63,6 +65,9 @@ templ calendarPage(v calendarView) {
 							{ c.Cal.Owner }
 							if c.Cal.Subscribed() {
 								<span class="badge">subscription</span>
+							}
+							for _, n := range v.mergedNames(c.Cal.ID) {
+								<span class="badge">+ { n }</span>
 							}
 							if !c.Mine {
 								<span class="muted">(read-only for you)</span>
@@ -138,46 +143,51 @@ templ eventBlock(v detailView) {
 templ subscriptions(v calendarView) {
 	<h2 id="subscriptions">Subscriptions</h2>
 	<p class="lead">
-		An iCal link (Luma's “Calendar Syncing”, a Google or Outlook calendar's secret address) shown as a read-only calendar,
-		refreshed every 30 minutes. Only the calendar is in git; the link holds a secret, so it's stored encrypted on the server.
+		An iCal link (Luma's “Calendar Syncing”, a Google or Outlook calendar's secret address), refreshed every 30 minutes.
+		Show its events in one of your calendars (one calendar in your apps; its events can't be edited there), or as a read-only calendar of its own. Only the calendar is in git; the link holds a secret, so it's stored encrypted on the server.
 	</p>
-	for _, c := range v.Calendars {
-		if c.Mine && c.Feed != nil {
-			<div class="subscription">
-				<h3>{ c.Cal.Title() } <code>{ c.Cal.ID }</code></h3>
-				if c.Feed.NeedsURL {
-					@flashBox(flash{"warn", "The link for this subscription isn't stored on this server any more. Paste it again below."})
-				} else {
-					<p class="sub">
-						{ c.Feed.URLHint } · { itemCount(c.Feed.Items) } · fetched { ago(c.Feed.FetchedAt) }
-					</p>
-					if c.Feed.Error != "" {
-						@flashBox(flash{"error", "Last fetch failed (" + ago(c.Feed.CheckedAt) + "): " + c.Feed.Error + ". The last copy is still shown."})
+	for _, c := range v.Subs {
+		<div class="subscription">
+			<h3>{ c.Cal.Title() } <code>{ c.Cal.ID }</code></h3>
+			if c.Feed.NeedsURL {
+				@flashBox(flash{"warn", "The link for this subscription isn't stored on this server any more. Paste it again below."})
+			} else {
+				<p class="sub">
+					{ c.Feed.URLHint } · { itemCount(c.Feed.Items) } · fetched { ago(c.Feed.FetchedAt) }
+					if c.Into != "" {
+						· shown in { c.Into }
 					}
+				</p>
+				if c.Feed.Error != "" {
+					@flashBox(flash{"error", "Last fetch failed (" + ago(c.Feed.CheckedAt) + "): " + c.Feed.Error + ". The last copy is still shown."})
 				}
-				<div class="buttons-row">
-					if !c.Feed.NeedsURL {
-						<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID + "/refresh") }>
-							<button type="submit">Refresh now</button>
-						</form>
-					}
-					<details>
-						<summary>Change link</summary>
-						<form method="post" action="/settings/calendar/subscribe" class="settings">
-							<input type="hidden" name="id" value={ c.Cal.ID }/>
-							<input type="hidden" name="name" value={ c.Cal.Title() }/>
-							<label for={ "url-" + c.Cal.ID }>iCal link</label>
-							<input id={ "url-" + c.Cal.ID } name="url" type="url" placeholder="https://… or webcal://…" autocomplete="off" required/>
-							<button type="submit">Save link</button>
-						</form>
-					</details>
-				</div>
-				<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID + "/unsubscribe") } class="danger">
-					<label class="check"><input type="checkbox" name="confirm" required/> Remove this subscription.</label>
-					<button type="submit">Remove</button>
+			}
+			<div class="buttons-row">
+				if !c.Feed.NeedsURL {
+					<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID + "/refresh") }>
+						<button type="submit">Refresh now</button>
+					</form>
+				}
+				<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID + "/merge") } class="rename">
+					@intoSelect(v.Mine, c.Cal.MergedInto(), "Show "+c.Cal.Title()+" as")
+					<button type="submit">Save</button>
 				</form>
+				<details>
+					<summary>Change link</summary>
+					<form method="post" action="/settings/calendar/subscribe" class="settings">
+						<input type="hidden" name="id" value={ c.Cal.ID }/>
+						<input type="hidden" name="name" value={ c.Cal.Title() }/>
+						<label for={ "url-" + c.Cal.ID }>iCal link</label>
+						<input id={ "url-" + c.Cal.ID } name="url" type="url" placeholder="https://… or webcal://…" autocomplete="off" required/>
+						<button type="submit">Save link</button>
+					</form>
+				</details>
 			</div>
-		}
+			<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID + "/unsubscribe") } class="danger">
+				<label class="check"><input type="checkbox" name="confirm" required/> Remove this subscription.</label>
+				<button type="submit">Remove</button>
+			</form>
+		</div>
 	}
 	if v.CanSeal {
 		<form method="post" action="/settings/calendar/subscribe" class="settings">
@@ -186,10 +196,27 @@ templ subscriptions(v calendarView) {
 			<input id="sub-name" name="name" type="text" value={ v.SubName } placeholder="e.g. Luma" required/>
 			<label for="sub-url">iCal link</label>
 			<input id="sub-url" name="url" type="url" value={ v.SubURL } placeholder="https://… or webcal://…" autocomplete="off" required/>
+			<label for="sub-into">Show</label>
+			@intoSelect(v.Mine, v.SubInto, "")
 			<p class="help">On Luma: Settings → Calendar Syncing → Add iCal Subscription, then copy the link. The link is checked before anything is saved.</p>
 			<button type="submit" class="primary">Subscribe</button>
 		</form>
 	} else {
 		@flashBox(flash{"warn", "There's no master key on the server (BRAIN_MASTER_KEY_FILE), so subscription links can't be stored."})
 	}
+}
+
+// intoSelect picks where a subscription's events show: as part of one of
+// my calendars, or as a calendar of their own.
+templ intoSelect(mine []calendar.Calendar, current, ariaLabel string) {
+	<select name="into" if ariaLabel != "" {
+	aria-label={ ariaLabel }
+} else {
+	id="sub-into"
+}>
+		for _, m := range mine {
+			<option value={ m.ID } selected?={ m.ID == current }>In { m.Title() }</option>
+		}
+		<option value="" selected?={ current == "" }>As its own calendar</option>
+	</select>
 }

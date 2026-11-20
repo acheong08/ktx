@@ -33,6 +33,7 @@ type ToDo struct {
 	Created     time.Time
 	Rule        string // repeat rule (RRULE value), "" if it doesn't repeat
 	Repeats     bool   // Rule != ""; ticking it done moves it to its next date
+	ReadOnly    bool   // from an iCal subscription
 }
 
 // Overdue reports whether an open task's due date has passed.
@@ -148,7 +149,7 @@ func toDoOf(c Calendar, o Object) (ToDo, error) {
 	if m == nil {
 		return ToDo{}, errors.New("no VTODO in the file")
 	}
-	t := ToDo{Calendar: c, Name: o.Name, ETag: o.ETag}
+	t := ToDo{Calendar: c, Name: o.Name, ETag: o.ETag, ReadOnly: o.Feed != "" || c.Subscribed()}
 	t.UID, _ = m.Props.Text(ical.PropUID)
 	t.Summary, _ = m.Props.Text(ical.PropSummary)
 	t.Description, _ = m.Props.Text(ical.PropDescription)

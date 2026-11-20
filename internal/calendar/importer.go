@@ -100,7 +100,7 @@ func Import(root string, c Calendar, r io.Reader) (ImportReport, []string, error
 
 	existing := map[string]string{} // uid -> file name
 	taken := map[string]bool{}
-	objs, err := ListObjects(root, c)
+	objs, err := gitObjects(root, c)
 	if err != nil {
 		return rep, nil, err
 	}

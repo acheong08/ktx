@@ -52,3 +52,28 @@ func TestSubscriptionsUI(t *testing.T) {
 		t.Fatalf("remove:\n%s", body)
 	}
 }
+
+func TestMergedSubscriptionUI(t *testing.T) {
+	e := setupAuth(t)
+	ant := e.browser()
+	e.signIn(t, ant, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi"}}, "/")
+	_, body, _ := ant.do(t, "GET", "/settings/calendar", nil)
+	if !strings.Contains(body, `<option value="personal" selected>In Personal</option>`) {
+		t.Fatalf("default isn't merge into personal:\n%s", body)
+	}
+	code, body, _ := ant.do(t, "POST", "/settings/calendar/subscribe", url.Values{"name": {"Luma"}, "url": {e.feedURL}, "into": {"personal"}})
+	if code != 200 || !strings.Contains(body, "show as part of Personal") || !strings.Contains(body, ">+ Luma</span>") || strings.Contains(body, ">subscription</span>") {
+		t.Fatalf("merged subscribe: %d\n%s", code, body)
+	}
+	if !strings.Contains(body, "shown in Personal") {
+		t.Fatalf("status:\n%s", body)
+	}
+	// The event shows in the agenda, under Personal.
+	if _, body, _ = ant.do(t, "GET", "/agenda?week=2026-11-23", nil); !strings.Contains(body, "Luma AI Night") {
+		t.Fatalf("agenda:\n%s", body)
+	}
+	// Split it out again.
+	if _, body, _ = ant.do(t, "POST", "/settings/calendar/luma/merge", url.Values{"into": {""}}); !strings.Contains(body, ">subscription</span>") || strings.Contains(body, ">+ Luma</span>") {
+		t.Fatalf("unmerge:\n%s", body)
+	}
+}

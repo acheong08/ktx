@@ -28,6 +28,17 @@ import (
 // Subscription marks a calendar as an iCal subscription.
 type Subscription struct {
 	Refresh string `json:"refresh,omitempty"` // how often to fetch, e.g. "30m"
+	// MergeInto is the id of one of the owner's own calendars this feed is
+	// shown as part of, instead of as a calendar of its own.
+	MergeInto string `json:"merge_into,omitempty"`
+}
+
+// MergedInto is the calendar id a subscription is shown in, or "".
+func (c Calendar) MergedInto() string {
+	if c.Subscription == nil {
+		return ""
+	}
+	return c.Subscription.MergeInto
 }
 
 // Subscribed reports whether c shows an iCal feed.
@@ -229,4 +240,58 @@ func DeleteCalendar(root string, c Calendar) ([]string, error) {
 		return nil, err
 	}
 	return []string{cur.Dir()}, nil
+}
+
+// mergedFeeds lists the owner's subscriptions merged into calendar id (it
+// must be one of their own, not a subscription).
+func mergedFeeds(root, owner, id string) ([]Calendar, error) {
+	entries, err := os.ReadDir(filepath.Join(root, Root, owner))
+	if err != nil {
+		return nil, nil
+	}
+	var out []Calendar
+	for _, e := range entries {
+		if !e.IsDir() || !ValidID(e.Name()) || e.Name() == id {
+			continue
+		}
+		c, err := readCalendar(root, owner, e.Name())
+		if err != nil {
+			return nil, err
+		}
+		if c.MergedInto() == id {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// withFeeds adds the objects of the feeds merged into c to its own (git)
+// objects. A feed object whose UID c already has is left out: the git copy
+// wins (e.g. a Luma event accepted from its email invite).
+func withFeeds(c Calendar, own []Object) ([]Object, error) {
+	if len(c.merged) == 0 {
+		return own, nil
+	}
+	uids := map[string]bool{}
+	names := map[string]bool{}
+	for _, o := range own {
+		uids[fileUID(o)] = true
+		names[o.Name] = true
+	}
+	out := own
+	for _, sub := range c.merged {
+		objs, err := feedObjects(sub)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range objs {
+			if uids[fileUID(o)] || names[o.Name] {
+				continue
+			}
+			o.Path, o.Feed = path.Join(c.Dir(), o.Name), sub.Key()
+			names[o.Name] = true
+			out = append(out, o)
+		}
+	}
+	return out, nil
 }

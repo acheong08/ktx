@@ -154,6 +154,7 @@ func (u *UI) Handler() http.Handler {
 		if u.feeds != nil {
 			mux.HandleFunc("POST /settings/calendar/subscribe", u.page(u.subscribe))
 			mux.HandleFunc("POST /settings/calendar/{id}/refresh", u.page(u.refreshSubscription))
+			mux.HandleFunc("POST /settings/calendar/{id}/merge", u.page(u.mergeSubscription))
 			mux.HandleFunc("POST /settings/calendar/{id}/unsubscribe", u.page(u.unsubscribe))
 		}
 	}
