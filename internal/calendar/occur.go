@@ -399,6 +399,15 @@ func Occurrences(root string, cals []Calendar, from, to time.Time) (out []Occurr
 			out = append(out, expand(c, ev, from, to)...)
 		}
 	}
+	subscribed := map[string]bool{}
+	for _, c := range cals {
+		if c.Subscribed() {
+			subscribed[c.Key()] = true
+		}
+	}
+	if len(subscribed) > 0 {
+		out = dropSubscribedCopies(out, subscribed)
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
 	return out, problems, nil
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/acheong08/ktx/internal/ai"
 	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
+	"github.com/acheong08/ktx/internal/feeds"
 	"github.com/acheong08/ktx/internal/gitrepo"
 	"github.com/acheong08/ktx/internal/mcpserver"
 	"github.com/acheong08/ktx/internal/notes"
@@ -141,13 +142,19 @@ func (stub) Sync(_ context.Context, _ connectors.Config, cursor string, _ func(s
 }
 
 type authEnv struct {
-	ts    *httptest.Server
-	idp   *fakeIDP
-	db    *state.DB
-	st    *store.Store
-	cal   *calendar.Service
-	notes *notes.Service
+	ts      *httptest.Server
+	idp     *fakeIDP
+	db      *state.DB
+	st      *store.Store
+	cal     *calendar.Service
+	notes   *notes.Service
+	feedURL string // a Luma-like iCal feed
 }
+
+// testFeed is what the fake feed server serves.
+const testFeed = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Luma//EN\r\n" +
+	"BEGIN:VEVENT\r\nUID:evt-web@events.lu.ma\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:20261124T020000Z\r\nDTEND:20261124T040000Z\r\nSUMMARY:Luma AI Night\r\nEND:VEVENT\r\n" +
+	"END:VCALENDAR\r\n"
 
 // llmDelay slows the fake model, to watch titles arrive in a browser.
 var llmDelay time.Duration
@@ -197,13 +204,24 @@ func setupAuth(t *testing.T) *authEnv {
 	nts.SetTiming(50*time.Millisecond, time.Millisecond)
 	nts.Start(ctx)
 
+	feedSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("token") != "t0k" {
+			http.Error(w, "no", http.StatusForbidden)
+			return
+		}
+		fmt.Fprint(w, testFeed)
+	}))
+	t.Cleanup(feedSrv.Close)
+	subs := feeds.New(db, box, cal, filepath.Join(dir, "feeds"), quiet, feeds.WithHTTPClient(feedSrv.Client()))
+	t.Cleanup(func() { calendar.SetFeedDir("") })
+
 	mux := http.NewServeMux()
 	prov := oauth.New(db, ts.URL, quiet)
 	prov.Register(mux)
 	mcpserver.New(st, cal, nts, prov, "test", quiet).Register(mux)
-	mux.Handle("/", New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr, Calendar: cal, OAuth: prov, Notes: nts, AI: aiSettings}).Handler())
+	mux.Handle("/", New(Options{Store: st, Log: quiet, DB: db, Auth: auth, Connectors: mgr, Calendar: cal, OAuth: prov, Notes: nts, AI: aiSettings, Feeds: subs}).Handler())
 	handler = mux
-	return &authEnv{ts: ts, idp: idp, db: db, st: st, cal: cal, notes: nts}
+	return &authEnv{ts: ts, idp: idp, db: db, st: st, cal: cal, notes: nts, feedURL: feedSrv.URL + "/ics?token=t0k"}
 }
 
 func (e *authEnv) browser() *env {

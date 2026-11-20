@@ -62,6 +62,8 @@ type Calendar struct {
 	Name        string `json:"name"`
 	Color       string `json:"color,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Subscription is set for a calendar that shows an iCal feed (read-only).
+	Subscription *Subscription `json:"subscription,omitempty"`
 }
 
 // Key is "<owner>/<id>".
@@ -181,6 +183,7 @@ func UpdateCalendar(root string, c Calendar) ([]string, error) {
 	if len(c.Name) > 200 || len(c.Description) > 2000 {
 		return nil, fmt.Errorf("%w: name or description too long", ErrInvalid)
 	}
+	c.Subscription = old.Subscription // only package feeds sets or clears it
 	if old.Name == c.Name && old.Color == c.Color && old.Description == c.Description {
 		return nil, nil
 	}
@@ -189,8 +192,12 @@ func UpdateCalendar(root string, c Calendar) ([]string, error) {
 	return []string{rel}, writeFile(root, rel, append(b, '\n'))
 }
 
-// ListObjects reads every event file of a calendar, by name.
+// ListObjects reads every event file of a calendar, by name. For a
+// subscribed calendar, they come from the cached feed.
 func ListObjects(root string, c Calendar) ([]Object, error) {
+	if c.Subscribed() {
+		return feedObjects(c)
+	}
 	dir := filepath.Join(root, filepath.FromSlash(c.Dir()))
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -218,6 +225,18 @@ func GetObject(root string, c Calendar, name string) (Object, error) {
 	if !ValidObjectName(name) {
 		return Object{}, ErrNotFound
 	}
+	if c.Subscribed() {
+		objs, err := feedObjects(c)
+		if err != nil {
+			return Object{}, err
+		}
+		for _, o := range objs {
+			if o.Name == name {
+				return o, nil
+			}
+		}
+		return Object{}, ErrNotFound
+	}
 	return readObject(root, path.Join(c.Dir(), name))
 }
 
@@ -234,8 +253,10 @@ func PutObject(root string, c Calendar, name string, data *ical.Calendar, opt Pu
 	if !ValidObjectName(name) {
 		return Object{}, false, nil, fmt.Errorf("%w: event file names are letters, digits and ._@+=- ending in .ics", ErrInvalid)
 	}
-	if _, err := GetCalendar(root, c.Owner, c.ID); err != nil {
+	if cur, err := GetCalendar(root, c.Owner, c.ID); err != nil {
 		return Object{}, false, nil, err
+	} else if cur.Subscribed() {
+		return Object{}, false, nil, ErrReadOnly
 	}
 	uid, err := checkObject(data)
 	if err != nil {
@@ -274,6 +295,9 @@ func PutObject(root string, c Calendar, name string, data *ical.Calendar, opt Pu
 
 // DeleteObject removes one event file and returns the paths to commit.
 func DeleteObject(root string, c Calendar, name, ifMatch string) ([]string, error) {
+	if cur, err := GetCalendar(root, c.Owner, c.ID); err == nil && cur.Subscribed() {
+		return nil, ErrReadOnly
+	}
 	o, err := GetObject(root, c, name)
 	if err != nil {
 		return nil, err

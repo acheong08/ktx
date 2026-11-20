@@ -155,6 +155,22 @@ var migrations = []string{
 	// A title given by the writer (agents may), and what wrote the note.
 	`ALTER TABLE pending_notes ADD COLUMN title TEXT NOT NULL DEFAULT '';
 	ALTER TABLE pending_notes ADD COLUMN via TEXT NOT NULL DEFAULT '';`,
+	// iCal subscriptions: the sealed feed URL (it holds the feed's secret)
+	// and fetch state. The calendar itself is in git.
+	`CREATE TABLE subscriptions (
+		owner         TEXT NOT NULL,
+		calendar      TEXT NOT NULL,
+		url           BLOB NOT NULL,            -- sealed
+		url_hint      TEXT NOT NULL DEFAULT '', -- host, to recognise it
+		etag          TEXT NOT NULL DEFAULT '',
+		last_modified TEXT NOT NULL DEFAULT '',
+		fetched_at    TEXT,                     -- last successful fetch
+		checked_at    TEXT,                     -- last attempt
+		error         TEXT NOT NULL DEFAULT '',
+		items         INTEGER NOT NULL DEFAULT 0,
+		created_by    TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (owner, calendar)
+	);`,
 }
 
 func (s *DB) migrate() error {

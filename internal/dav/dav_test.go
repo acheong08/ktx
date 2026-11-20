@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -427,5 +428,49 @@ func TestToDos(t *testing.T) {
 	nov := query("VTODO", time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC))
 	if got := strings.Join(nov, ","); got != "done-nov,undated,weekly" {
 		t.Fatalf("november: %s", got)
+	}
+}
+
+func TestSubscribedCalendarReadOnly(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	calendar.SetFeedDir(dir)
+	t.Cleanup(func() { calendar.SetFeedDir("") })
+	sub := calendar.Calendar{Owner: "antonio", ID: "luma", Name: "Luma", Subscription: &calendar.Subscription{}}
+	if err := e.svc.SetSubscription(ctx, sub, "antonio"); err != nil {
+		t.Fatal(err)
+	}
+	feed := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:evt-1@events.lu.ma\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:20261124T020000Z\r\nDTEND:20261124T030000Z\r\nSUMMARY:AI Night\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	os.MkdirAll(filepath.Join(dir, "antonio"), 0o700)
+	if err := os.WriteFile(filepath.Join(dir, "antonio", "luma.ics"), []byte(feed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := e.client(t, "antonio", e.antonioTok)
+	path := Prefix + "/antonio/calendars/luma/"
+	objs, err := c.QueryCalendar(ctx, path, &caldav.CalendarQuery{
+		CompRequest: caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true},
+		CompFilter:  caldav.CompFilter{Name: "VCALENDAR", Comps: []caldav.CompFilter{{Name: "VEVENT"}}},
+	})
+	if err != nil || len(objs) != 1 {
+		t.Fatalf("query: %d %v", len(objs), err)
+	}
+	if _, err := c.PutCalendarObject(ctx, path+"new.ics", event("new", "x", time.Now()), nil); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("put: %v", err)
+	}
+	if err := c.RemoveAll(ctx, objs[0].Path, nil); err == nil {
+		t.Fatal("delete allowed")
+	}
+	// It's offered read-only, for its owner too; their own calendar isn't.
+	cals, err := c.FindCalendars(ctx, Prefix+"/antonio/calendars/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro := map[string]bool{}
+	for _, cal := range cals {
+		ro[cal.Path] = cal.ReadOnly
+	}
+	if !ro[path] || ro[Prefix+"/antonio/calendars/work/"] {
+		t.Fatalf("read-only: %v", ro)
 	}
 }

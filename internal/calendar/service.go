@@ -2,8 +2,10 @@ package calendar
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -166,18 +168,57 @@ func (s *Service) UpdateCalendar(ctx context.Context, c Calendar, user string) e
 	return err
 }
 
-// EnsureCalendar creates owner's calendar id if they have no calendar yet.
+// EnsureCalendar creates owner's calendar id if they have no calendar of
+// their own yet (subscriptions don't count).
 func (s *Service) EnsureCalendar(ctx context.Context, owner, id, name string) error {
 	cals, err := s.Calendars()
 	if err != nil {
 		return err
 	}
 	for _, c := range cals {
-		if c.Owner == owner {
+		if c.Owner == owner && !c.Subscribed() { // a subscription can't hold their own events
 			return nil
 		}
 	}
 	return s.CreateCalendar(ctx, Calendar{Owner: owner, ID: id, Name: name}, owner)
+}
+
+// DeleteCalendar removes a subscribed calendar from git.
+func (s *Service) DeleteCalendar(ctx context.Context, c Calendar, user string) error {
+	_, err := s.update(ctx, user, func(root string) ([]string, string, error) {
+		paths, err := DeleteCalendar(root, c)
+		return paths, "Calendar: remove subscription " + c.Key(), err
+	})
+	return err
+}
+
+// SetSubscription creates or updates a subscribed calendar's metadata in
+// git (name and refresh); its feed URL is kept elsewhere (package feeds).
+func (s *Service) SetSubscription(ctx context.Context, c Calendar, user string) error {
+	if c.Subscription == nil {
+		c.Subscription = &Subscription{}
+	}
+	_, err := s.update(ctx, user, func(root string) ([]string, string, error) {
+		old, err := GetCalendar(root, c.Owner, c.ID)
+		if err == nil && !old.Subscribed() {
+			return nil, "", ErrExists
+		}
+		verb := "add"
+		if err == nil {
+			verb = "update"
+			c.Color, c.Description = old.Color, old.Description
+		}
+		if !ValidID(c.Owner) || !ValidID(c.ID) {
+			return nil, "", fmt.Errorf("%w: calendar ids are lowercase letters, digits, '-' and '_'", ErrInvalid)
+		}
+		b, _ := json.MarshalIndent(c, "", "  ")
+		rel := path.Join(c.Dir(), metaFile)
+		if err := writeFile(root, rel, append(b, '\n')); err != nil {
+			return nil, "", err
+		}
+		return []string{rel}, fmt.Sprintf("Calendar: %s subscription %s (%q)", verb, c.Key(), c.Title()), nil
+	})
+	return err
 }
 
 // Put stores one event file.

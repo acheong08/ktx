@@ -190,7 +190,13 @@ One workspace-wide [Neuralwatt](https://neuralwatt.com) key (`https://api.neural
 
 Every tool requires an `intent`: one sentence on why the call is made. It is written to the log (`journalctl -u brain-server | grep 'mcp call'`) with the user, app and tool, and not stored anywhere else. Dates without an offset are in the workspace's time zone (Settings → General).
 
-**Connecting an app:** add the URL as a remote MCP server. The app discovers the rest and opens a browser:
+**Subscriptions (iCal links):** **Settings → Calendar → Subscribe to a calendar** takes an iCal link (Luma: Settings → Calendar Syncing → Add iCal Subscription; or a Google or Outlook calendar's secret address; `webcal://` works) and shows it as a read-only calendar of yours, for your calendar apps too (no edits, even by you; events can't be imported into it).
+- **What's stored where:** only the calendar is in git: `calendar/<owner>/<id>/calendar.json` with `"subscription": {}`. The link holds the feed's secret, so it's sealed with the master key in `state.db` (`subscriptions`; Settings shows only its host). The last fetched copy is kept in `/var/lib/ktx/feeds/<owner>/<id>.ics`, outside git. If `state.db` is lost, the subscription shows "isn't stored any more": paste the link again.
+- **Fetching:** every 30 minutes (`"refresh": "1h"` in calendar.json changes it; at least 5 minutes), with conditional requests, a 20 MB limit and a 1-minute timeout; **Refresh now** on Settings. A failed fetch keeps the last copy and shows the error. Events removed from the feed disappear. Only public internet addresses over https are fetched: links (or redirects) to loopback, private, link-local or tailnet (100.64.0.0/10) addresses are refused.
+- **Linking:** transcripts are matched to feed events like any other, and re-matched when a feed changes. An event that's both in a calendar of yours and in a feed (e.g. a Luma event you accepted from its email invite) shows once; your own copy wins.
+- **Removing** it (Settings) deletes the calendar from git, the stored link and the cached copy.
+
+ add the URL as a remote MCP server. The app discovers the rest and opens a browser:
 1. `/mcp` answers 401 with `WWW-Authenticate: Bearer resource_metadata=…/.well-known/oauth-protected-resource/mcp` (RFC 9728), naming ktx as the authorization server (`/.well-known/oauth-authorization-server`, RFC 8414).
 2. The app registers itself at `/oauth/register` (dynamic client registration; always a public client). Redirect URIs may be `https`, `http` (ktx is tailnet-only) or an app scheme; `javascript:`, `data:` and the like are refused. Apps that never get allowed are removed after a day.
 3. `/oauth/authorize` signs you in through Pocket ID as usual and shows a consent page naming the app, what it can do (read everything, write notes labelled slop) and where you'll be sent back to. PKCE (S256) is required.

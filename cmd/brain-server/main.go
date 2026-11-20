@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/acheong08/ktx/internal/connectors/granola"
 	"github.com/acheong08/ktx/internal/connectors/pocket"
 	"github.com/acheong08/ktx/internal/dav"
+	"github.com/acheong08/ktx/internal/feeds"
 	"github.com/acheong08/ktx/internal/gitrepo"
 	"github.com/acheong08/ktx/internal/mcpserver"
 	"github.com/acheong08/ktx/internal/notes"
@@ -156,7 +158,14 @@ func run(log *slog.Logger) error {
 	aiSettings := ai.NewSettings(db, box) // without a master key, notes get first-line titles
 	nts := notes.New(repo, db, aiSettings, log)
 	nts.Start(ctx) // names and commits notes in the background, including ones queued before a restart
+	// iCal subscriptions: URLs sealed in state.db, fetched feeds cached
+	// next to it (outside git).
+	subs := feeds.New(db, box, cal, filepath.Join(filepath.Dir(cfg.StatePath), "feeds"), log)
+	subs.Start(ctx)
 	ui := web.Options{Store: st, Types: types, Log: log, DB: db, Auth: auth, Calendar: cal, Notes: nts}
+	if auth != nil {
+		ui.Feeds = subs
+	}
 	if auth != nil {
 		ui.AI = aiSettings    // admins set the key
 		ui.Connectors = conns // connections belong to people, so they need sign-in

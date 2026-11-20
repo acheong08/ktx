@@ -187,7 +187,7 @@ func toDAV(user string, c calendar.Calendar) caldav.Calendar {
 	return caldav.Calendar{
 		Path: calPath(user, c), Name: name, Description: c.Description, Color: c.Color,
 		MaxResourceSize: maxEventBytes, SupportedComponentSet: []string{ical.CompEvent, ical.CompToDo},
-		ReadOnly: c.Owner != user,
+		ReadOnly: c.Owner != user || c.Subscribed(),
 	}
 }
 
@@ -387,6 +387,8 @@ func mapErr(err error) error {
 		return webdav.NewHTTPError(http.StatusMethodNotAllowed, err)
 	case errors.Is(err, calendar.ErrInvalid):
 		return webdav.NewHTTPError(http.StatusBadRequest, err)
+	case errors.Is(err, calendar.ErrReadOnly):
+		return webdav.NewHTTPError(http.StatusForbidden, err)
 	}
 	return fmt.Errorf("caldav: %w", err)
 }

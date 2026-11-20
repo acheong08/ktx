@@ -1,14 +1,17 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/acheong08/ktx/internal/calendar"
+	"github.com/acheong08/ktx/internal/feeds"
 	"github.com/acheong08/ktx/internal/state"
 	"github.com/acheong08/ktx/internal/store"
 	"github.com/acheong08/ktx/internal/transcript"
@@ -25,6 +28,7 @@ func calendarOwner(u state.User) string { return strings.ToLower(u.Username) }
 type calRow struct {
 	Cal    calendar.Calendar
 	Mine   bool
+	Feed   *feeds.Status // set for a subscription (nil without a feed manager)
 	Events int
 	Tasks  int // to-dos (VTODO), shown in calendar apps' task lists
 }
@@ -47,6 +51,10 @@ type calendarView struct {
 	Flash     flash
 	NewID     string
 	NewName   string
+	Feeds     bool   // subscriptions can be added
+	CanSeal   bool   // there's a master key for feed URLs
+	SubName   string // the subscribe form, kept on error
+	SubURL    string
 }
 
 func davURL(r *http.Request) string { return "https://" + r.Host + "/dav/" }
@@ -68,6 +76,10 @@ func (u *UI) calendarView(r *http.Request) (calendarView, error) {
 			return v, err
 		}
 		row := calRow{Cal: c, Mine: c.Owner == owner}
+		if c.Subscribed() && u.feeds != nil {
+			st := u.feeds.Status(c)
+			row.Feed = &st
+		}
 		for _, o := range objs {
 			if o.IsToDo() {
 				row.Tasks++
@@ -76,10 +88,12 @@ func (u *UI) calendarView(r *http.Request) (calendarView, error) {
 			}
 		}
 		v.Calendars = append(v.Calendars, row)
-		if c.Owner == owner {
+		if c.Owner == owner && !c.Subscribed() {
 			v.Mine = append(v.Mine, c)
 		}
 	}
+	v.Feeds = u.feeds != nil
+	v.CanSeal = v.Feeds && u.feeds.CanStoreURLs()
 	sort.SliceStable(v.Calendars, func(i, j int) bool { return v.Calendars[i].Mine && !v.Calendars[j].Mine })
 
 	return v, nil
@@ -335,4 +349,100 @@ func eventWhen(l *transcript.EventLink) string {
 		return l.Start
 	}
 	return t.In(calendar.DefaultZone()).Format("Mon 2 Jan 2006, 15:04 MST")
+}
+
+// --- subscriptions -------------------------------------------------------------
+
+// subscribe adds an iCal subscription, or (with id) gives one a new link.
+func (u *UI) subscribe(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	owner := calendarOwner(user)
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	name, link, id := strings.TrimSpace(r.PostFormValue("name")), strings.TrimSpace(r.PostFormValue("url")), r.PostFormValue("id")
+	if id == "" {
+		id = u.freeCalendarID(owner, name)
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Minute)
+	defer cancel()
+	err := u.feeds.Subscribe(ctx, owner, id, name, link, actor(r))
+	v, verr := u.calendarView(r)
+	if verr != nil {
+		u.fail(w, r, verr)
+		return
+	}
+	if err != nil {
+		u.log.Warn("subscribing failed", "calendar", owner+"/"+id, "err", err)
+		v.SubName, v.SubURL = name, link
+		v.Flash = flash{"error", "Couldn't subscribe: " + err.Error()}
+		u.render(w, r, http.StatusUnprocessableEntity, calendarPage(v))
+		return
+	}
+	v.Flash = flash{"ok", "Subscribed. Its events show in the agenda and your calendar apps (read-only), and are refreshed every 30 minutes."}
+	u.render(w, r, http.StatusOK, calendarPage(v))
+}
+
+// freeCalendarID makes a calendar id from a name that owner doesn't use yet.
+func (u *UI) freeCalendarID(owner, name string) string {
+	base := transcript.Slugify(name, 30)
+	if base == "" || !calendar.ValidID(base) {
+		base = "subscription"
+	}
+	id := base
+	for i := 2; ; i++ {
+		if _, err := u.cal.Calendar(owner, id); err != nil {
+			return id
+		}
+		id = base + "-" + strconv.Itoa(i)
+	}
+}
+
+func (u *UI) refreshSubscription(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Minute)
+	defer cancel()
+	changed, err := u.feeds.Refresh(ctx, calendarOwner(user), r.PathValue("id"))
+	v, verr := u.calendarView(r)
+	if verr != nil {
+		u.fail(w, r, verr)
+		return
+	}
+	switch {
+	case err != nil:
+		v.Flash = flash{"error", "Refreshing failed: " + err.Error() + ". The last copy is kept."}
+	case changed:
+		v.Flash = flash{"ok", "Refreshed; the feed had changes."}
+	default:
+		v.Flash = flash{"ok", "Refreshed; nothing changed."}
+	}
+	u.render(w, r, http.StatusOK, calendarPage(v))
+}
+
+func (u *UI) unsubscribe(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	if r.PostFormValue("confirm") == "" {
+		http.Redirect(w, r, "/settings/calendar", http.StatusSeeOther)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Minute)
+	defer cancel()
+	err := u.feeds.Unsubscribe(ctx, calendarOwner(user), r.PathValue("id"), actor(r))
+	v, verr := u.calendarView(r)
+	if verr != nil {
+		u.fail(w, r, verr)
+		return
+	}
+	if err != nil {
+		v.Flash = flash{"error", "Couldn't remove it: " + err.Error()}
+		u.render(w, r, http.StatusUnprocessableEntity, calendarPage(v))
+		return
+	}
+	v.Flash = flash{"ok", "Subscription removed."}
+	u.render(w, r, http.StatusOK, calendarPage(v))
+}
+
+func itemCount(n int) string {
+	if n == 1 {
+		return "1 item"
+	}
+	return strconv.Itoa(n) + " items"
 }

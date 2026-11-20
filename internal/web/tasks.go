@@ -113,7 +113,7 @@ func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
 	}
 	var from []calendar.Calendar
 	for _, c := range cals {
-		if c.Owner == owner {
+		if c.Owner == owner && !c.Subscribed() {
 			v.Mine = append(v.Mine, c)
 		}
 		if all || c.Owner == owner {
@@ -155,7 +155,7 @@ func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
 				continue
 			}
 		}
-		v.Rows = append(v.Rows, taskRow{T: t, Mine: t.Calendar.Owner == owner, Due: fmtDue(t, now),
+		v.Rows = append(v.Rows, taskRow{T: t, Mine: t.Calendar.Owner == owner && !t.Calendar.Subscribed(), Due: fmtDue(t, now),
 			Overdue: t.Overdue(now), URL: taskURL(t.Calendar, t.Name)})
 	}
 	return v, nil
@@ -363,7 +363,7 @@ func (u *UI) task(w http.ResponseWriter, r *http.Request) (calendar.ToDo, bool, 
 		u.fail(w, r, err)
 		return t, false, false
 	}
-	return t, t.Calendar.Owner == calendarOwner(user), true
+	return t, t.Calendar.Owner == calendarOwner(user) && !t.Calendar.Subscribed(), true
 }
 
 // toggleTask ticks a task done or open. From htmx it returns the list.

@@ -37,6 +37,7 @@ import (
 	"github.com/acheong08/ktx/internal/ai"
 	"github.com/acheong08/ktx/internal/calendar"
 	"github.com/acheong08/ktx/internal/connectors"
+	"github.com/acheong08/ktx/internal/feeds"
 	"github.com/acheong08/ktx/internal/notes"
 	"github.com/acheong08/ktx/internal/oauth"
 	"github.com/acheong08/ktx/internal/state"
@@ -57,6 +58,7 @@ type UI struct {
 	oauth  *oauth.Provider     // nil: no MCP apps
 	notes  *notes.Service      // nil: no notes
 	ai     *ai.Settings        // nil: no AI settings
+	feeds  *feeds.Manager      // nil: no calendar subscriptions
 	types  []string            // suggested types, merged with the folders that exist
 	log    *slog.Logger
 	assets assets
@@ -76,13 +78,14 @@ type Options struct {
 	Calendar   *calendar.Service
 	OAuth      *oauth.Provider // apps (MCP clients) people can allow; needs Auth
 	Notes      *notes.Service
-	AI         *ai.Settings // the AI provider; editable by admins, so needs Auth
+	AI         *ai.Settings   // the AI provider; editable by admins, so needs Auth
+	Feeds      *feeds.Manager // iCal subscriptions; needs Auth and Calendar
 }
 
 // New builds the UI.
 func New(o Options) *UI {
 	return &UI{
-		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, cal: o.Calendar, oauth: o.OAuth, notes: o.Notes, ai: o.AI, types: o.Types, log: o.Log,
+		store: o.Store, db: o.DB, auth: o.Auth, conns: o.Connectors, cal: o.Calendar, oauth: o.OAuth, notes: o.Notes, ai: o.AI, feeds: o.Feeds, types: o.Types, log: o.Log,
 		assets: assets{
 			CSS:  assetURL("style.css"),
 			JS:   assetURL("app.js"),
@@ -148,6 +151,11 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("POST /settings/calendar", u.page(u.createCalendar))
 		mux.HandleFunc("POST /settings/calendar/import", u.page(u.importCalendar))
 		mux.HandleFunc("POST /settings/calendar/{id}", u.page(u.renameCalendar))
+		if u.feeds != nil {
+			mux.HandleFunc("POST /settings/calendar/subscribe", u.page(u.subscribe))
+			mux.HandleFunc("POST /settings/calendar/{id}/refresh", u.page(u.refreshSubscription))
+			mux.HandleFunc("POST /settings/calendar/{id}/unsubscribe", u.page(u.unsubscribe))
+		}
 	}
 
 	if u.auth != nil && u.db != nil {

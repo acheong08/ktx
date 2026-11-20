@@ -54,8 +54,10 @@ type ImportReport struct {
 // Nothing is deleted. It returns the paths to commit.
 func Import(root string, c Calendar, r io.Reader) (ImportReport, []string, error) {
 	var rep ImportReport
-	if _, err := GetCalendar(root, c.Owner, c.ID); err != nil {
+	if cur, err := GetCalendar(root, c.Owner, c.ID); err != nil {
 		return rep, nil, err
+	} else if cur.Subscribed() {
+		return rep, nil, ErrReadOnly
 	}
 
 	zones := map[string]*ical.Component{}

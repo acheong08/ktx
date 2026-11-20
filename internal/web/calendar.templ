@@ -61,6 +61,9 @@ templ calendarPage(v calendarView) {
 						</td>
 						<td data-label="Owner">
 							{ c.Cal.Owner }
+							if c.Cal.Subscribed() {
+								<span class="badge">subscription</span>
+							}
 							if !c.Mine {
 								<span class="muted">(read-only for you)</span>
 							}
@@ -72,6 +75,9 @@ templ calendarPage(v calendarView) {
 				}
 			</tbody>
 		</table>
+		if v.Feeds {
+			@subscriptions(v)
+		}
 		<div class="columns">
 			<form method="post" action="/settings/calendar/import" enctype="multipart/form-data" class="settings">
 				<h3>Import an .ics file</h3>
@@ -127,4 +133,63 @@ templ eventBlock(v detailView) {
 			<button type="submit">Set</button>
 		</form>
 	</dd>
+}
+
+templ subscriptions(v calendarView) {
+	<h2 id="subscriptions">Subscriptions</h2>
+	<p class="lead">
+		An iCal link (Luma's “Calendar Syncing”, a Google or Outlook calendar's secret address) shown as a read-only calendar,
+		refreshed every 30 minutes. Only the calendar is in git; the link holds a secret, so it's stored encrypted on the server.
+	</p>
+	for _, c := range v.Calendars {
+		if c.Mine && c.Feed != nil {
+			<div class="subscription">
+				<h3>{ c.Cal.Title() } <code>{ c.Cal.ID }</code></h3>
+				if c.Feed.NeedsURL {
+					@flashBox(flash{"warn", "The link for this subscription isn't stored on this server any more. Paste it again below."})
+				} else {
+					<p class="sub">
+						{ c.Feed.URLHint } · { itemCount(c.Feed.Items) } · fetched { ago(c.Feed.FetchedAt) }
+					</p>
+					if c.Feed.Error != "" {
+						@flashBox(flash{"error", "Last fetch failed (" + ago(c.Feed.CheckedAt) + "): " + c.Feed.Error + ". The last copy is still shown."})
+					}
+				}
+				<div class="buttons-row">
+					if !c.Feed.NeedsURL {
+						<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID + "/refresh") }>
+							<button type="submit">Refresh now</button>
+						</form>
+					}
+					<details>
+						<summary>Change link</summary>
+						<form method="post" action="/settings/calendar/subscribe" class="settings">
+							<input type="hidden" name="id" value={ c.Cal.ID }/>
+							<input type="hidden" name="name" value={ c.Cal.Title() }/>
+							<label for={ "url-" + c.Cal.ID }>iCal link</label>
+							<input id={ "url-" + c.Cal.ID } name="url" type="url" placeholder="https://… or webcal://…" autocomplete="off" required/>
+							<button type="submit">Save link</button>
+						</form>
+					</details>
+				</div>
+				<form method="post" action={ templ.URL("/settings/calendar/" + c.Cal.ID + "/unsubscribe") } class="danger">
+					<label class="check"><input type="checkbox" name="confirm" required/> Remove this subscription.</label>
+					<button type="submit">Remove</button>
+				</form>
+			</div>
+		}
+	}
+	if v.CanSeal {
+		<form method="post" action="/settings/calendar/subscribe" class="settings">
+			<h3>Subscribe to a calendar</h3>
+			<label for="sub-name">Name</label>
+			<input id="sub-name" name="name" type="text" value={ v.SubName } placeholder="e.g. Luma" required/>
+			<label for="sub-url">iCal link</label>
+			<input id="sub-url" name="url" type="url" value={ v.SubURL } placeholder="https://… or webcal://…" autocomplete="off" required/>
+			<p class="help">On Luma: Settings → Calendar Syncing → Add iCal Subscription, then copy the link. The link is checked before anything is saved.</p>
+			<button type="submit" class="primary">Subscribe</button>
+		</form>
+	} else {
+		@flashBox(flash{"warn", "There's no master key on the server (BRAIN_MASTER_KEY_FILE), so subscription links can't be stored."})
+	}
 }
