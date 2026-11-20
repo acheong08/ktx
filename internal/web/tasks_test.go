@@ -239,3 +239,24 @@ func TestAddTaskWithTags(t *testing.T) {
 		t.Fatalf("kept:\n%s", body)
 	}
 }
+
+func TestAddTaskWithNotes(t *testing.T) {
+	e := setupAuth(t)
+	ant := e.browser()
+	e.signIn(t, ant, idpUser{sub: "u1", username: "antonio", groups: []string{"melzi"}}, "/")
+	long := "Call them about the exit fee.\r\nAsk for the IBAN letter " + strings.Repeat("and more words ", 20)
+	ant.do(t, "POST", "/tasks", url.Values{"title": {"Revolut - Email Exit"}, "notes": {long}})
+	_, body, _ := ant.do(t, "GET", "/tasks", nil)
+	m := regexp.MustCompile(`<div class="note-preview" title="[^"]*">([^<]*)</div>`).FindStringSubmatch(body)
+	if m == nil || !strings.HasPrefix(m[1], "Call them about the exit fee. Ask for the IBAN letter") || !strings.HasSuffix(m[1], "…") || len([]rune(m[1])) > 141 {
+		t.Fatalf("preview:\n%s", body)
+	}
+	link := regexp.MustCompile(`<a href="(/tasks/antonio/personal/[^"]+)">Revolut`).FindStringSubmatch(body)[1]
+	if _, body, _ = ant.do(t, "GET", link, nil); !strings.Contains(body, "Call them about the exit fee.\nAsk for the IBAN letter") {
+		t.Fatalf("notes not saved:\n%s", body)
+	}
+	// Kept when adding fails.
+	if _, body, _ = ant.do(t, "POST", "/tasks", url.Values{"title": {" "}, "notes": {"keep this"}}); !strings.Contains(body, ">keep this</textarea>") {
+		t.Fatal("notes lost on error")
+	}
+}

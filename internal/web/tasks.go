@@ -35,7 +35,7 @@ type tasksView struct {
 	Problems []string
 	Flash    flash
 	// The add form, kept when it fails.
-	Title, DueDate, DueTime, Into, Repeat, Tags string
+	Title, DueDate, DueTime, Into, Repeat, Tags, Notes string
 	KnownTags                                   []string // tags on the tasks shown, for suggestions
 }
 
@@ -302,6 +302,7 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 	owner := calendarOwner(user)
 	title, date, clock, into := r.PostFormValue("title"), r.PostFormValue("due_date"), r.PostFormValue("due_time"), r.PostFormValue("calendar")
 	repeat, tags := r.PostFormValue("repeat"), r.PostFormValue("tags")
+	notes := strings.TrimSpace(strings.ReplaceAll(r.PostFormValue("notes"), "\r\n", "\n"))
 	if into == "" {
 		into = DefaultCalendarID
 	}
@@ -312,7 +313,7 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v.Flash = flash{"error", msg}
-		v.Title, v.DueDate, v.DueTime, v.Into, v.Repeat, v.Tags = title, date, clock, into, repeat, tags
+		v.Title, v.DueDate, v.DueTime, v.Into, v.Repeat, v.Tags, v.Notes = title, date, clock, into, repeat, tags, notes
 		u.render(w, r, http.StatusUnprocessableEntity, tasksPage(v))
 	}
 	if into == DefaultCalendarID { // as on the page itself, so a first add works too
@@ -333,7 +334,7 @@ func (u *UI) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
-	t, err := u.cal.SaveToDo(ctx, calendar.ToDo{Calendar: c, Summary: title, Due: due, DueAllDay: allDay, Rule: repeat, Categories: parseTags(tags)}, time.Now(), actor(r))
+	t, err := u.cal.SaveToDo(ctx, calendar.ToDo{Calendar: c, Summary: title, Due: due, DueAllDay: allDay, Rule: repeat, Categories: parseTags(tags), Description: notes}, time.Now(), actor(r))
 	if msg := taskSaveError(err); msg != "" {
 		fail(msg)
 		return
@@ -519,4 +520,20 @@ func ariaBool(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// notePreview is the start of a task's notes on one line, for the list.
+func notePreview(notes string) string {
+	s := strings.Join(strings.Fields(notes), " ")
+	if r := []rune(s); len(r) > 140 {
+		cut := 139
+		for i := cut; i > 100; i-- {
+			if r[i] == ' ' {
+				cut = i
+				break
+			}
+		}
+		s = strings.TrimSpace(string(r[:cut])) + "…"
+	}
+	return s
 }

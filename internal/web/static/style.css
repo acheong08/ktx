@@ -266,3 +266,7 @@ form.addtask input[name=tags] { flex: 1 1 10rem; min-width: 0; }
 .subscription .buttons-row { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: flex-start; margin: .5rem 0; }
 .subscription .buttons-row form { margin: 0; }
 .subscription form.danger { margin-top: .5rem; }
+form.addtask textarea[name=notes] { flex: 1 1 100%; order: 1; font-family: inherit; font-size: 14px; resize: vertical; min-height: 2.6rem; }
+form.addtask button[type=submit] { order: 2; }
+ul.tasks .note-preview { color: var(--muted); font-size: 13px; margin-top: .1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { form.addtask textarea[name=notes] { font-size: 16px; } }

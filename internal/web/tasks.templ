@@ -82,6 +82,7 @@ templ tasksPage(v tasksView) {
 			</label>
 			@repeatSelect("", "Repeat", v.Repeat)
 			<input name="tags" type="text" value={ v.Tags } placeholder="Tags, comma-separated" aria-label="Tags (optional, comma-separated)" list="task-tags" autocomplete="off"/>
+			<textarea name="notes" rows="2" placeholder="Notes (optional)" aria-label="Notes (optional)" data-ctrl-enter-submits>{ v.Notes }</textarea>
 			<datalist id="task-tags">
 				for _, tag := range v.KnownTags {
 					<option value={ tag }></option>
@@ -174,6 +175,9 @@ templ taskList(v tasksView) {
 						}
 						<div class="what">
 							<a href={ templ.URL(r.URL) }>{ r.T.Summary }</a>
+							if p := notePreview(r.T.Description); p != "" {
+								<div class="note-preview" title={ p }>{ p }</div>
+							}
 							<div class="sub">
 								if r.Due != "" {
 									<span class={ "due", templ.KV("late", r.Overdue) }>{ r.Due }</span>
