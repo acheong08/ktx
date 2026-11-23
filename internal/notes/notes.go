@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -64,6 +65,7 @@ type Note struct {
 	EditedBy string
 	Body     string
 	Labels   []string
+	Fields          // goal/decision fields, links, private (graph.go)
 	Via      string // what wrote it, e.g. "MCP: <app>"; "" for a person in the web UI
 	Pending  bool   // not in git yet: being named or committed
 	Error    string // why the last attempt to save a pending note failed
@@ -90,6 +92,11 @@ type meta struct {
 	EditedBy string   `yaml:"edited_by,omitempty"`
 	Labels   []string `yaml:"labels,omitempty,flow"`
 	Via      string   `yaml:"via,omitempty"`
+	Kind     string   `yaml:"kind,omitempty"`
+	Status   string   `yaml:"status,omitempty"`
+	Strength string   `yaml:"strength,omitempty"`
+	Private  bool     `yaml:"private,omitempty"`
+	BasedOn  []Ref    `yaml:"based_on,omitempty"`
 }
 
 // Service stores notes and runs the worker that saves new ones.
@@ -103,6 +110,8 @@ type Service struct {
 	retry     time.Duration
 	aiTries   int
 	aiBackoff time.Duration
+
+	transcriptExists func(id string) bool
 }
 
 // New makes a Service. Call Start to run the worker.
@@ -110,6 +119,10 @@ func New(repo Repo, db *state.DB, settings *ai.Settings, log *slog.Logger) *Serv
 	return &Service{repo: repo, db: db, ai: settings, log: log, now: time.Now,
 		wake: make(chan struct{}, 1), retry: time.Minute, aiTries: 2, aiBackoff: 5 * time.Second}
 }
+
+// SetTranscriptCheck tells the service how to check that a linked
+// transcript exists (without it, transcript links are taken on trust).
+func (s *Service) SetTranscriptCheck(exists func(id string) bool) { s.transcriptExists = exists }
 
 // SetTiming shortens the worker's waits, for tests.
 func (s *Service) SetTiming(retry, aiBackofff time.Duration) {
@@ -147,6 +160,7 @@ type Submission struct {
 	Labels []string
 	Title  string // optional; without one the model writes it
 	Via    string // what wrote it, e.g. "MCP: <app>"
+	Fields Fields // goal/decision, links, private
 }
 
 // MaxBody bounds a note's text.
@@ -170,9 +184,23 @@ func (s *Service) SubmitNote(sub Submission) (string, error) {
 	if r := []rune(title); len(r) > 100 {
 		title = string(r[:100])
 	}
+	fields, err := normalizeFields(sub.Fields)
+	if err != nil {
+		return "", err
+	}
 	id := newID()
+	if len(fields.BasedOn) > 0 {
+		all, err := s.List()
+		if err != nil {
+			return "", err
+		}
+		if err := checkRefs(id, fields.BasedOn, all, s.transcriptExists); err != nil {
+			return "", err
+		}
+	}
+	meta, _ := json.Marshal(fields)
 	if err := s.db.AddPendingNote(state.PendingNote{ID: id, Author: sub.Author, Body: body, Labels: labels,
-		Title: title, Via: sub.Via, CreatedAt: s.now()}); err != nil {
+		Title: title, Via: sub.Via, Meta: string(meta), CreatedAt: s.now()}); err != nil {
 		return "", err
 	}
 	select {
@@ -210,7 +238,7 @@ func (s *Service) save(ctx context.Context, p state.PendingNote) error {
 		title, how = p.Title, "given"
 	}
 	n := Note{ID: p.ID, Title: title, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body,
-		Labels: ordered(append(slices.Clone(p.Labels), suggested...), defs), Via: p.Via}
+		Labels: ordered(append(slices.Clone(p.Labels), suggested...), defs), Via: p.Via, Fields: pendingFields(p)}
 	gctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	res, err := s.repo.Update(gctx, func(root string) (gitrepo.Change, error) {
@@ -272,18 +300,27 @@ func (s *Service) describe(ctx context.Context, body string, defs []Label) (titl
 	return ai.FallbackTitle(body), nil, "first line"
 }
 
-// List returns every note, pending ones included, newest first.
+// List returns every note, pending ones included, newest first. Callers
+// showing notes to someone filter with Note.Visible.
 func (s *Service) List() ([]Note, error) {
 	var out []Note
-	err := s.repo.View(func(root string) error {
-		return walk(root, func(rel string) error {
-			n, err := readNote(root, rel)
-			if err != nil {
-				return err
-			}
-			out = append(out, n)
-			return nil
-		})
+	err := s.repo.View(func(root string) (err error) {
+		out, err = s.listIn(root)
+		return err
+	})
+	return out, err
+}
+
+// listIn is List on a working copy the caller holds.
+func (s *Service) listIn(root string) ([]Note, error) {
+	var out []Note
+	err := walk(root, func(rel string) error {
+		n, err := readNote(root, rel)
+		if err != nil {
+			return err
+		}
+		out = append(out, n)
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -329,11 +366,23 @@ func (s *Service) Get(id string) (Note, error) {
 	return pendingNote(p), nil
 }
 
-// Edit changes a note's title and text in one commit, renaming the file if
-// the title changed.
-func (s *Service) Edit(ctx context.Context, id, title, body string, labels []string, user string) (Note, error) {
-	title = strings.Join(strings.Fields(title), " ")
-	body = normalize(body)
+// Changes are what an edit sets: everything the edit form shows.
+type Changes struct {
+	Title, Body string
+	Labels      []string
+	Fields      Fields
+}
+
+// Edit changes a note in one commit, renaming the file if the title
+// changed.
+func (s *Service) Edit(ctx context.Context, id string, c Changes, user string) (Note, error) {
+	title := strings.Join(strings.Fields(c.Title), " ")
+	body := normalize(c.Body)
+	labels := c.Labels
+	fields, err := normalizeFields(c.Fields)
+	if err != nil {
+		return Note{}, err
+	}
 	if title == "" {
 		return Note{}, errors.New("give the note a title")
 	}
@@ -341,7 +390,7 @@ func (s *Service) Edit(ctx context.Context, id, title, body string, labels []str
 		return Note{}, errors.New("the note is empty")
 	}
 	var n Note
-	_, err := s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
+	_, err = s.repo.Update(ctx, func(root string) (gitrepo.Change, error) {
 		rel, err := findByID(root, id)
 		if err != nil {
 			return gitrepo.Change{}, err
@@ -360,10 +409,19 @@ func (s *Service) Edit(ctx context.Context, id, title, body string, labels []str
 		if labels, err = checkLabelsIn(labels, defs, n.Labels); err != nil {
 			return gitrepo.Change{}, err
 		}
-		if n.Title == title && n.Body == body && slices.Equal(n.Labels, labels) {
+		if len(fields.BasedOn) > 0 {
+			all, err := s.listIn(root)
+			if err != nil {
+				return gitrepo.Change{}, err
+			}
+			if err := checkRefs(id, fields.BasedOn, all, s.transcriptExists); err != nil {
+				return gitrepo.Change{}, err
+			}
+		}
+		if n.Title == title && n.Body == body && slices.Equal(n.Labels, labels) && sameFields(n.Fields, fields) {
 			return gitrepo.Change{}, nil
 		}
-		n.Title, n.Body, n.Labels = title, body, labels
+		n.Title, n.Body, n.Labels, n.Fields = title, body, labels, fields
 		n.EditedAt, n.EditedBy = s.now().In(calendar.DefaultZone()).Format(time.RFC3339), user
 		n.Path = path.Join(Root, fileName(n))
 		ch := gitrepo.Change{Paths: []string{n.Path}, Message: commitMessage("Edit note", n.Title, n.ID, user)}
@@ -407,7 +465,8 @@ func (s *Service) missing(id string) error {
 }
 
 func pendingNote(p state.PendingNote) Note {
-	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body, Labels: p.Labels, Via: p.Via, Pending: true, Error: p.Error}
+	n := Note{ID: p.ID, Created: p.CreatedAt.In(calendar.DefaultZone()), Author: p.Author, Body: p.Body, Labels: p.Labels, Via: p.Via,
+		Fields: pendingFields(p), Pending: true, Error: p.Error}
 	n.search = strings.ToLower(n.Author + "\n" + strings.Join(n.Labels, " ") + "\n" + n.Body)
 	return n
 }
@@ -443,7 +502,8 @@ func render(n Note) []byte {
 	b.WriteString("---\n")
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
-	_ = enc.Encode(meta{Title: n.Title, Created: n.Created.Format(time.RFC3339), Author: n.Author, EditedAt: n.EditedAt, EditedBy: n.EditedBy, Labels: n.Labels, Via: n.Via})
+	_ = enc.Encode(meta{Title: n.Title, Created: n.Created.Format(time.RFC3339), Author: n.Author, EditedAt: n.EditedAt, EditedBy: n.EditedBy, Labels: n.Labels, Via: n.Via,
+		Kind: n.Kind, Status: n.Status, Strength: n.Strength, Private: n.Private, BasedOn: n.BasedOn})
 	b.WriteString("---\n")
 	b.WriteString(n.Body)
 	if !strings.HasSuffix(n.Body, "\n") {
@@ -467,6 +527,7 @@ func readNote(root, rel string) (Note, error) {
 			var m meta
 			if err := yaml.Unmarshal([]byte(fm), &m); err == nil {
 				n.Title, n.Author, n.EditedAt, n.EditedBy, n.Labels, n.Via = m.Title, m.Author, m.EditedAt, m.EditedBy, m.Labels, m.Via
+				n.Fields = Fields{Kind: m.Kind, Status: m.Status, Strength: m.Strength, Private: m.Private, BasedOn: m.BasedOn}
 				if t, err := time.Parse(time.RFC3339, m.Created); err == nil {
 					n.Created = t
 				}
@@ -478,7 +539,7 @@ func readNote(root, rel string) (Note, error) {
 	if n.Title == "" {
 		n.Title = ai.FallbackTitle(body)
 	}
-	n.search = strings.ToLower(n.Title + "\n" + n.Author + "\n" + strings.Join(n.Labels, " ") + "\n" + n.Body)
+	n.search = strings.ToLower(n.Title + "\n" + n.Author + "\n" + strings.Join(n.Labels, " ") + "\n" + n.Kind + " " + n.Status + "\n" + n.Body)
 	return n, nil
 }
 
@@ -535,4 +596,17 @@ func commitMessage(action, title, id, user string) string {
 // normalize turns CR LF (as browsers submit) into LF.
 func normalize(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+}
+
+// pendingFields decodes a queued note's graph fields.
+func pendingFields(p state.PendingNote) Fields {
+	var f Fields
+	if p.Meta != "" {
+		_ = json.Unmarshal([]byte(p.Meta), &f)
+	}
+	return f
+}
+
+func sameFields(a, b Fields) bool {
+	return a.Kind == b.Kind && a.Status == b.Status && a.Strength == b.Strength && a.Private == b.Private && slices.Equal(a.BasedOn, b.BasedOn)
 }

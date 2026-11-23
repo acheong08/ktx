@@ -157,6 +157,7 @@ func run(log *slog.Logger) error {
 	}
 	aiSettings := ai.NewSettings(db, box) // without a master key, notes get first-line titles
 	nts := notes.New(repo, db, aiSettings, log)
+	nts.SetTranscriptCheck(func(id string) bool { _, err := st.Get(id); return err == nil })
 	nts.Start(ctx) // names and commits notes in the background, including ones queued before a restart
 	// iCal subscriptions: URLs sealed in state.db, fetched feeds cached
 	// next to it (outside git).

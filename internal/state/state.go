@@ -171,6 +171,8 @@ var migrations = []string{
 		created_by    TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (owner, calendar)
 	);`,
+	// Goal/decision fields of a queued note (JSON; see package notes).
+	`ALTER TABLE pending_notes ADD COLUMN meta TEXT NOT NULL DEFAULT '';`,
 }
 
 func (s *DB) migrate() error {

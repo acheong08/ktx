@@ -144,7 +144,7 @@ form.rename input { width: 12rem; min-width: 0; flex: 1; }
 @media (max-width: 640px) {
   main { padding: 1rem; }
   header.top { flex-wrap: wrap; gap: .25rem 1rem; padding: .5rem 1rem; }
-  header nav { order: 3; flex-basis: 100%; gap: 1.25rem; }
+  header nav { order: 3; flex-basis: 100%; flex-wrap: wrap; gap: .25rem 1rem; }
   .account { margin-left: auto; gap: .5rem; font-size: 14px; }
   h1 { font-size: 1.3rem; }
   input, select, textarea { font-size: 16px; } /* stops iOS zooming into fields */
@@ -270,3 +270,45 @@ form.addtask textarea[name=notes] { flex: 1 1 100%; order: 1; font-family: inher
 form.addtask button[type=submit] { order: 2; }
 ul.tasks .note-preview { color: var(--muted); font-size: 13px; margin-top: .1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 640px) { form.addtask textarea[name=notes] { font-size: 16px; } }
+
+/* Decision graph */
+details.graph-fields { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .75rem; margin: .25rem 0; }
+details.graph-fields > summary { cursor: pointer; color: var(--muted); }
+details.graph-fields[open] > summary { margin-bottom: .5rem; }
+.graph-grid { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+.graph-grid label { display: grid; gap: .2rem; font-weight: normal; flex: 1 1 9rem; min-width: 0; }
+.graph-grid label > span { color: var(--muted); font-size: 13px; }
+.graph-grid input[name=title] { min-width: 0; }
+.graph-grid label:has(input[name=title]) { flex-basis: 100%; }
+fieldset.based-on { border: 0; padding: 0; margin: .75rem 0 .5rem; display: grid; gap: .35rem; }
+fieldset.based-on legend { font-weight: 600; padding: 0; margin-bottom: .2rem; }
+.ref-rows { display: grid; gap: .35rem; }
+.ref-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: .4rem; align-items: center; }
+.ref-row .ref-label { overflow-wrap: anywhere; font-size: 14px; }
+.ref-row button { padding: .2rem .55rem; }
+.ref-results { display: flex; flex-direction: column; align-items: flex-start; gap: .2rem; }
+.ref-option { background: none; border: 0; padding: .15rem 0; color: var(--accent); text-align: left; cursor: pointer; }
+@media (max-width: 640px) { .ref-row { grid-template-columns: minmax(0, 1fr) auto; } .ref-row input[name=quote] { grid-column: 1 / -1; grid-row: 2; } }
+nav.kinds { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: 0 0 .5rem; font-size: 14px; }
+nav.kinds a { color: var(--muted); }
+nav.kinds a.active { color: var(--fg); font-weight: 600; }
+.label.kind-goal { border-color: #4a90e2; }
+.label.kind-decision { border-color: #9b59b6; }
+.label.status-done { opacity: .6; }
+.label.status-open { font-style: italic; }
+.label.private { border-style: dashed; }
+ul.refs { list-style: none; padding: 0; margin: 0 0 1rem; display: grid; gap: .4rem; }
+ul.refs blockquote { margin: .2rem 0 0 .75rem; padding-left: .6rem; border-left: 3px solid var(--line); color: var(--muted); font-style: italic; }
+ul.graph { list-style: none; margin: 0; padding: 0; }
+ul.graph ul.graph { margin-left: .4rem; padding-left: .9rem; border-left: 2px solid var(--line); }
+ul.graph > li { padding: .45rem 0; }
+ul.graph .node { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .4rem; }
+ul.graph .node-title { font-weight: 600; overflow-wrap: anywhere; }
+ul.graph li.again > .node .node-title { font-weight: normal; }
+ul.graph li.finished > .node .node-title { color: var(--muted); text-decoration: line-through; }
+ul.graph .node-context { margin: .25rem 0 0 .25rem; font-size: 14px; }
+ul.graph .node-context ul.refs { margin: 0; gap: .2rem; }
+ul.node-tasks { list-style: none; margin: .25rem 0 0 .25rem; padding: 0; font-size: 14px; display: grid; gap: .15rem; }
+ul.node-tasks li.done a { color: var(--muted); text-decoration: line-through; }
+.graph-grid label[hidden] { display: none; }
+.graph-grid select, .graph-grid input { width: 100%; min-width: 0; box-sizing: border-box; }

@@ -185,6 +185,9 @@ templ taskList(v tasksView) {
 								if r.T.Repeats {
 									<span class="badge" title={ r.T.Rule }>{ describeRule(r.T.Rule) }</span>
 								}
+								if r.For != nil {
+									<a class="label for" href={ templ.URL(r.For.Ref) }>→ { r.For.Label }</a>
+								}
 								for _, c := range r.T.Categories {
 									<span class="label">{ c }</span>
 								}
@@ -236,6 +239,15 @@ templ taskPage(v taskFormView) {
 				</div>
 				<label for="repeat">Repeat</label>
 				@repeatSelect("repeat", "", v.Repeat)
+				if len(v.Targets) > 0 || v.For != "" {
+					<label for="for">For</label>
+					<select id="for" name="for">
+						<option value="" selected?={ v.For == "" }>No goal or decision</option>
+						for _, o := range v.Targets {
+							<option value={ o.Ref } selected?={ o.Ref == v.For }>{ o.Label }</option>
+						}
+					</select>
+				}
 				<label for="tags">Tags</label>
 				<input id="tags" name="tags" type="text" value={ v.Tags } placeholder="Comma-separated, e.g. MVP Bread, blocked"/>
 				<label for="notes">Notes</label>

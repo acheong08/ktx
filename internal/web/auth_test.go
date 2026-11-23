@@ -201,6 +201,7 @@ func setupAuth(t *testing.T) *authEnv {
 	aiSettings := ai.NewSettings(db, box)
 	aiSettings.SetBaseURL(llm.URL + "/v1/")
 	nts := notes.New(repo, db, aiSettings, quiet)
+	nts.SetTranscriptCheck(func(id string) bool { _, err := st.Get(id); return err == nil })
 	nts.SetTiming(50*time.Millisecond, time.Millisecond)
 	nts.Start(ctx)
 

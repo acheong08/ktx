@@ -1,0 +1,202 @@
+package web
+
+import "github.com/acheong08/ktx/internal/notes"
+
+// graphFields is the goal/decision block of the scratchpad and the edit
+// form: kind, status (one select per kind; app.js enables the one that
+// matches), strength, private, and "based on" links picked by search.
+templ graphFields(v graphFieldsView, withTitle bool, title string) {
+	<details class="graph-fields" open?={ v.Open } data-graph-fields data-kind={ v.Kind }>
+		<summary>Goal or decision, based on, private</summary>
+		<div class="graph-grid">
+			if withTitle {
+				<label>
+					<span>Title</span>
+					<input name="title" type="text" value={ title } placeholder="Optional; written for you otherwise" maxlength="100"/>
+				</label>
+			}
+			<label>
+				<span>This note is</span>
+				<select name="kind" data-kind-select>
+					<option value="" selected?={ v.Kind == "" }>A plain note (context)</option>
+					<option value="goal" selected?={ v.Kind == "goal" }>A goal</option>
+					<option value="decision" selected?={ v.Kind == "decision" }>A decision</option>
+				</select>
+			</label>
+			for _, k := range []string{"goal", "decision"} {
+				<label class="node-only" data-status-for={ k } hidden?={ v.Kind != k }>
+					<span>Status</span>
+					<select name="status" disabled?={ v.Kind != k }>
+						for _, s := range notes.Statuses(k) {
+							<option value={ s } selected?={ v.Status == s }>{ s }</option>
+						}
+					</select>
+				</label>
+			}
+			<label class="node-only" hidden?={ v.Kind == "" }>
+				<span>Strength</span>
+				<select name="strength">
+					<option value="" selected?={ v.Strength == "" }>—</option>
+					for _, s := range notes.Strengths {
+						<option value={ s } selected?={ v.Strength == s }>{ s }</option>
+					}
+				</select>
+			</label>
+		</div>
+		<fieldset class="based-on">
+			<legend>Based on</legend>
+			<div class="ref-rows" data-ref-rows>
+				for _, r := range v.Refs {
+					@refRow(r.Ref, r.Label(), r.Quote)
+				}
+			</div>
+			<template data-ref-row-template>
+				@refRow("", "", "")
+			</template>
+			<input type="search" name="q" placeholder="Find a note or call to link…" aria-label="Find a note or call to link" autocomplete="off"
+				hx-get="/graph/refs" hx-trigger="input delay:300ms" hx-target="next .ref-results" hx-swap="innerHTML" data-ref-search/>
+			<div class="ref-results"></div>
+			<p class="help">A goal or decision can rest on other goals and decisions, notes, and calls (quote what was said).</p>
+		</fieldset>
+		<label class="check"><input type="checkbox" name="private" value="1" checked?={ v.Private }/> Private: only I see it in ktx (it's still in git)</label>
+	</details>
+}
+
+templ refRow(ref, label, quote string) {
+	<div class="ref-row">
+		<input type="hidden" name="ref" value={ ref }/>
+		<span class="ref-label">{ label }</span>
+		<input type="text" name="quote" value={ quote } placeholder="Quote (optional)" aria-label="Quote (optional)"/>
+		<button type="button" data-remove-row aria-label="Remove link">×</button>
+	</div>
+}
+
+templ refResults(q string, opts []refOption) {
+	if q != "" && len(opts) == 0 {
+		<p class="muted">Nothing matches “{ q }”.</p>
+	}
+	for _, o := range opts {
+		<button type="button" class="ref-option" data-add-ref={ o.Ref } data-ref-label={ o.Label }>{ o.Label }</button>
+	}
+}
+
+// nodeTags are a goal or decision's kind, status and strength.
+templ nodeTags(f notes.Fields) {
+	if f.Kind != "" {
+		<span class={ "label", "kind-" + f.Kind }>{ f.Kind }</span>
+		<span class={ statusClass(f.Status) }>{ f.Status }</span>
+		if f.Strength != "" {
+			<span class="label">{ f.Strength }</span>
+		}
+	}
+	if f.Private {
+		<span class="label private">private</span>
+	}
+}
+
+templ refList(refs []refView) {
+	<ul class="refs">
+		for _, r := range refs {
+			<li>
+				if r.Missing {
+					<span class="muted">{ r.Label() }</span>
+				} else {
+					<a href={ templ.URL(r.URL) }>{ r.Label() }</a>
+				}
+				if r.Quote != "" {
+					<blockquote>{ r.Quote }</blockquote>
+				}
+			</li>
+		}
+	</ul>
+}
+
+templ graphPage(v graphView) {
+	@layout("Graph", v.Chrome) {
+		<h1>Graph</h1>
+		<p class="lead">
+			Goals and decisions, what they rest on, and the tasks for them. They're notes:
+			<a href="/notes?new_kind=goal#note-body">write one</a> in Notes and set “This note is” to a goal or decision.
+		</p>
+		<p class="sortswitch">
+			if v.Finished {
+				<a href="/graph">Hide finished</a>
+			} else {
+				<a href="/graph?finished=1">Show finished (achieved, dropped, rejected, reversed)</a>
+			}
+		</p>
+		if len(v.Nodes) == 0 {
+			<p class="empty">No goals or decisions yet.</p>
+		} else {
+			@graphNodes(v.Nodes)
+		}
+	}
+}
+
+templ graphNodes(ns []graphNodeView) {
+	<ul class="graph">
+		for _, n := range ns {
+			<li class={ templ.KV("again", n.Node.Again), templ.KV("finished", notes.Finished(n.Node.Note.Status)) }>
+				<div class="node">
+					<a href={ templ.URL("/notes/" + n.Node.Note.ID) } class="node-title">{ n.Node.Note.Title }</a>
+					@nodeTags(n.Node.Note.Fields)
+					if len(n.Others) > 0 {
+						<span class="muted">also under { joinTitles(n.Others) }</span>
+					}
+					if n.Node.Again {
+						<span class="muted">(shown above)</span>
+					}
+				</div>
+				if len(n.Context) > 0 {
+					<div class="node-context">
+						@refList(n.Context)
+					</div>
+				}
+				if len(n.Tasks) > 0 {
+					<ul class="node-tasks">
+						for _, t := range n.Tasks {
+							<li class={ templ.KV("done", t.T.Done) }>
+								if t.T.Done {
+									☑
+								} else {
+									☐
+								}
+								<a href={ templ.URL(t.URL) }>{ t.T.Summary }</a>
+								if !t.T.Done && fmtTaskDue(t.T) != "" {
+									<span class="muted">{ fmtTaskDue(t.T) }</span>
+								}
+							</li>
+						}
+					</ul>
+				}
+				if len(n.Kids) > 0 {
+					@graphNodes(n.Kids)
+				}
+			</li>
+		}
+	</ul>
+}
+
+// leadsList is the goals and decisions (and notes) based on something.
+templ leadsList(ns []notes.Note) {
+	<ul class="refs">
+		for _, n := range ns {
+			<li>
+				<a href={ templ.URL("/notes/" + n.ID) }>{ kindName(n.Kind) }: { noteLabel(n) }</a>
+				@nodeTags(n.Fields)
+			</li>
+		}
+	</ul>
+}
+
+func joinTitles(ts []string) string {
+	out := ""
+	for i, t := range ts {
+		if i > 0 {
+			out += ", "
+		}
+		out += "“" + t + "”"
+	}
+	return out
+}
+

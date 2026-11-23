@@ -11,7 +11,7 @@ transcripts/<type>/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md   Markdown + YAML front ma
 calendar/<owner>/<calendar>/calendar.json             name, colour, description
 calendar/<owner>/<calendar>/<uid>.ics                 one event (series + overrides + VTIMEZONEs) or one VTODO (task)
 calendar/<owner>/task-order.json                      that person's task list mode (due|manual) and manual order ("<cal>/<file>" keys); not a calendar
-notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md              scratchpad notes: title, created, author, labels, via (+ edited_*)
+notes/<YYYY-MM-DD>-<HHMM>-<slug>-<id>.md              notes: title, created, author, labels, via, kind/status/strength/private/based_on (+ edited_*)
 notes/labels.yaml                                     note labels: name + description (meaning); edited in Settings → Labels
 .ktx/deleted                                          ids deleted in the UI, so syncs don't bring them back
 ```
@@ -32,6 +32,7 @@ Key behaviours:
 - **Time zone:** one workspace zone (Settings → General, `settings` key `timezone`, default America/Los_Angeles) via `calendar.DefaultZone()`/`SetDefaultZone` (atomic; clears the event parse cache). All UI times use it; transcripts with their own zone also show it.
 - **Tasks (VTODO)** live in the same calendars (supported-calendar-component-set VEVENT+VTODO); not linked to transcripts. The UI (`calendar/todo.go`: ToDos/SaveToDo/SetToDoDone) edits only summary, description, due, categories, repeat rule and done state in the master VTODO, keeps everything else (an unchanged DUE keeps its own format/TZID), and requires the ETag it read (ErrPrecondition otherwise). Repeating tasks (`calendar/todorecur.go`): the RRULE counts from DTSTART, else DUE; ticking done calls advanceToDo (first date after max(current, now), DTSTART+DUE shifted together, COUNT decremented) and the task stays open until the rule runs out. `ToDoInRange` (RFC 4791 §9.9, with recurrence) is used by the CalDAV query filter. Manual order (`calendar/taskorder.go`, drag in `static/app.js` with pointer events): unplaced tasks first in due order, then the stored order; POST /tasks/order replaces the order with the posted keys (own calendars only) followed by previously ordered ones. go-webdav's `Match` rejects every VTODO with a time range, so `internal/dav/todo.go` strips those ranges and applies RFC 4791 §9.9 itself. Antonio's Vikunja "Antonio - Personal" projects were imported into `antonio/personal` as `vikunja-<id>` tasks, sub-project name in CATEGORIES.
 - **Subscriptions** (`internal/feeds`): a calendar.json with `"subscription"` shows an iCal feed; URL sealed in state.db `subscriptions`, feed cached in `<state dir>/feeds/<owner>/<id>.ics` (package-level `calendar.SetFeedDir`; ListObjects/GetObject split it per UID in memory). Writes return `calendar.ErrReadOnly` (CalDAV 403, ReadOnly for everyone); `calendar.DeleteCalendar` only removes subscriptions. Fetch client dials public addresses only (no proxy, https redirects); `feeds.WithHTTPClient` bypasses that for tests. Git copies of a UID win over feed copies. `subscription.merge_into: <id>` merges a feed into one of the owner's own calendars: ListCalendars hides the subscription (Service.Subscriptions lists all), GetCalendar fills the unexported `merged`, ListObjects/GetObject add feed objects (Object.Feed set, UID already in git skipped), Put/Delete on a feed object → ErrReadOnly, UID-conflict and import checks use git objects only (gitObjects). ToDo.ReadOnly marks feed tasks.
+- **Decision graph** (docs/decision-graph.md, `notes/graph.go`, `web/graph.go`, `mcpserver/graph.go`): goals/decisions are notes with `kind`; `based_on` refs `note:<id>`/`transcript:<id>` (+quote), loops refused (checkRefs); `notes.Outline` builds the tree per viewer. Private notes: `Note.Visible(viewer)` (viewer = actor/Display name) is checked by every notes list/page/edit/delete handler and MCP tool; private files are still in git. Tasks link with `X-KTX-FOR` (`ToDo.For`). Pending notes keep graph fields as JSON in `pending_notes.meta`. No review flags yet.
 - Everyone sees every calendar; only the owner writes (others get read-only over CalDAV as `<owner>~<id>`). The first CalDAV sign-in or Settings → Calendar visit creates `<user>/personal`.
 
 ## Code map
@@ -49,7 +50,7 @@ internal/secrets         AES-256-GCM sealing, master key from systemd credential
 internal/connectors      Manager (workers, runs, sealing) + granola/ + pocket/
 internal/server          POST /v1/transcripts, GET /healthz
 internal/ai              Settings (sealed Neuralwatt key + model in `settings`), Title() via charm.land/fantasy openaicompat (reasoning_effort none), CleanTitle/FallbackTitle
-internal/notes           notes/ in git + pending queue worker (Submit/List/Get/Edit/Delete); labels.go (labels.yaml)
+internal/notes           notes/ in git + pending queue worker (SubmitNote/List/Get/Edit(Changes)/Delete); labels.go (labels.yaml); graph.go (goal/decision fields, refs, Outline)
 internal/feeds           iCal subscriptions: Subscribe/Refresh/Unsubscribe, background fetch (30 min, conditional GET), SSRF-safe client, relink on change
 internal/oauth           OAuth 2.1 authorization server for MCP clients: metadata, /oauth/register, /oauth/token, codes (memory); consent page lives in web/oauth.go
 internal/mcpserver       /mcp on modelcontextprotocol/go-sdk (stateless, JSON responses, localhost protection off: Caddy is local); tools.go
@@ -117,5 +118,6 @@ UI checks without a passkey: write a throwaway test (not committed) that calls `
 - Calendar: invitations aren't sent; no sync-collection; a name-only participant plus the same person from the calendar (with email) shows twice.
 - Johann's pasted transcript says 2:00 PM; Granola says 12:00 PM (unconfirmed which is right).
 - fantasy keys provider options by provider name: don't `WithName` the openaicompat provider, or `reasoning_effort` is silently dropped.
+- Decision graph later: review flags when something upstream changes, a drawn graph, agent proposals with visual diff + approve/deny, links to code.
 - MCP writes only notes (always slop); other write tools (uploads, types, event links, events) are a possible next step.
 - Later: bookings (Cal.com) through the calendar; possibly move outreach's Granola→Folk logging into ktx.

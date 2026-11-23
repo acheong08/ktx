@@ -24,6 +24,9 @@ templ layout(title string, c chrome) {
 					if c.Notes {
 						<a href="/notes" class={ templ.KV("active", c.Nav == "notes") }>Notes</a>
 					}
+					if c.Notes {
+						<a href="/graph" class={ templ.KV("active", c.Nav == "graph") }>Graph</a>
+					}
 					if c.Agenda {
 						<a href="/agenda" class={ templ.KV("active", c.Nav == "agenda") }>Calendar</a>
 						<a href="/tasks" class={ templ.KV("active", c.Nav == "tasks") }>Tasks</a>
@@ -285,6 +288,13 @@ templ detailPage(v detailView) {
 			<div class="body">
 				@templ.Raw(v.BodyHTML)
 			</div>
+			if v.Notes && v.Entry.ID != "" {
+				if len(v.Leads) > 0 {
+					<h2>Based on this call</h2>
+					@leadsList(v.Leads)
+				}
+				<p><a class="button" href={ templ.URL("/notes?based_on=transcript:" + v.Entry.ID + "#note-body") }>Add a goal or decision based on this</a></p>
+			}
 			if v.Entry.ID != "" {
 				<form method="post" class="danger" action={ templ.URL("/transcripts/" + v.Entry.ID + "/delete") }>
 					<label class="check"><input type="checkbox" name="confirm"/> Delete this transcript. It stays in git history; connector syncs won't bring it back.</label>

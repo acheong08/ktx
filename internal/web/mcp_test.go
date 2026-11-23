@@ -193,7 +193,7 @@ func TestMCPOverOAuth(t *testing.T) {
 			t.Errorf("%s has no intent argument: %s", tl.Name, mustJSON(tl.InputSchema))
 		}
 	}
-	if strings.Join(names, ",") != "create_note,get_note,get_transcript,list_calendars,list_events,list_note_labels,list_transcript_types,search_notes,search_transcripts" {
+	if strings.Join(names, ",") != "create_note,get_graph,get_note,get_transcript,list_calendars,list_events,list_note_labels,list_transcript_types,search_notes,search_transcripts" {
 		t.Fatalf("tools: %v", names)
 	}
 

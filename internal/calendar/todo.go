@@ -34,7 +34,11 @@ type ToDo struct {
 	Rule        string // repeat rule (RRULE value), "" if it doesn't repeat
 	Repeats     bool   // Rule != ""; ticking it done moves it to its next date
 	ReadOnly    bool   // from an iCal subscription
+	For         string // the goal or decision it's for: "note:<id>" (X-KTX-FOR), or ""
 }
+
+// PropFor links a task to the goal or decision it's for.
+const PropFor = "X-KTX-FOR"
 
 // Overdue reports whether an open task's due date has passed.
 func (t ToDo) Overdue(now time.Time) bool {
@@ -181,6 +185,9 @@ func toDoOf(c Calendar, o Object) (ToDo, error) {
 	if rr := m.Props.Get(ical.PropRecurrenceRule); rr != nil {
 		t.Rule, t.Repeats = rr.Value, true
 	}
+	if p := m.Props.Get(PropFor); p != nil {
+		t.For = strings.TrimSpace(p.Value)
+	}
 	return t, nil
 }
 
@@ -279,6 +286,12 @@ func (s *Service) SaveToDo(ctx context.Context, t ToDo, now time.Time, user stri
 				m.Props.Del(ical.PropDateTimeStart)
 			}
 		}
+	}
+	m.Props.Del(PropFor)
+	if f := strings.TrimSpace(t.For); f != "" {
+		p := ical.NewProp(PropFor)
+		p.Value = f
+		m.Props.Set(p)
 	}
 	m.Props.Del(ical.PropCategories)
 	if len(t.Categories) > 0 {

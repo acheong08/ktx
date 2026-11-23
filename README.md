@@ -155,7 +155,21 @@ Talked to Jane at Acme. They want usage-based pricing and SSO before signing.
 - **Titles** come from the model in Settings → AI. Without a key, or if the model fails twice, the title is the note's first line. They're never regenerated: edit the title by hand.
 - **List, search, read, edit, delete** like transcripts. Everyone sees every note. Edits and deletes are committed straight away; a note can't be changed until its first commit is done.
 
-### Settings → Labels
+### Goals, decisions and the graph
+
+A note can be a **goal** or a **decision** (design: [docs/decision-graph.md](docs/decision-graph.md)). Open "Goal or decision, based on, private" on the scratchpad or edit form:
+- **This note is**: a plain note (context), a goal (active, achieved, paused, dropped) or a decision (considering, made, rejected, reversed). An option is a decision you're considering; a preference is a tentative goal.
+- **Strength**: hard, firm or tentative.
+- **Based on**: other goals and decisions, notes, and calls (transcripts), found by title, each with an optional quote of what was said. Links can't form a loop.
+- **Private**: only you see the note in ktx (lists, search, its page, the graph, other pages' links, MCP). It's still a file in company-brain, so it's hidden, not secret.
+
+They're stored in the note's front matter (`kind`, `status`, `strength`, `private`, `based_on: [{ref: note:<id> | transcript:<id>, quote: …}]`). The Notes list filters by kind; a note's and a call's page show what's based on them, with **Add a goal or decision based on this**.
+
+**Tasks** can say which goal or decision they're for (task page → For; stored as `X-KTX-FOR:note:<id>` in the VTODO, so phones keep it). The task list shows it.
+
+**Graph** (`/graph`): goals and decisions as an outline, each under the goals and decisions it's based on (a node with several shows in full once and as "also under" elsewhere), with its context (notes and calls, with quotes) and its tasks. Finished ones are hidden unless asked for. Agents get the same with MCP `get_graph`.
+
+
 
 Anyone signed in can add labels, change what they mean, or delete them. Definitions live in `notes/labels.yaml` (name and meaning, one commit per change):
 
@@ -182,8 +196,9 @@ One workspace-wide [Neuralwatt](https://neuralwatt.com) key (`https://api.neural
 | `get_transcript` | Metadata and text by id; long texts in pages (`offset`, `max_bytes`, `next_offset`). |
 | `list_transcript_types` | Types with counts. |
 | `list_note_labels` | The note labels, what each means, and how many notes have it. |
-| `search_notes` | Notes newest first, with their labels; filters: words, author, label, without_label, from/to dates. Notes still being saved are included (`pending`, no title yet). |
-| `get_note` | A note's title, author, labels, dates and text. |
+| `search_notes` | Notes newest first, with their labels and graph fields; filters: words, author, label, without_label, kind (goal, decision, plain), from/to dates. Notes still being saved are included (`pending`, no title yet). |
+| `get_note` | A note's title, author, labels, dates and text; for goals and decisions also status, strength, what it's based on and what's based on it. |
+| `get_graph` | Goals and decisions as an indented outline with status, strength, context (with quotes) and tasks; private ones only for their author. |
 | `create_note` | Writes a note (text, optional title and extra labels), labelled `slop`. Queued and committed like a scratchpad note; without a title the model writes one. |
 | `list_calendars` | Every calendar, with owner; `yours` marks the caller's. |
 | `list_events` | Occurrences in a range (default: today + 7 days, at most a year), optionally by calendar or words; organizer, guests, location, description (cut at 2000 bytes), and the transcripts recorded in each. |

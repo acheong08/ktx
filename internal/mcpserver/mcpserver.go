@@ -131,6 +131,8 @@ func (s *Server) instructions(u state.User) string {
 		"Start with search_transcripts (filters: words, type, participant, dates) and read one with get_transcript. " +
 		"Notes (search_notes, get_note) are free-form things people wrote down, separate from transcripts. " +
 		"Notes can have labels; list_note_labels says what each means (some may mark notes as unreviewed or unreliable). " +
+		"Some notes are goals or decisions (with a status, a strength and what they're based on); get_graph shows them as an outline " +
+		"with their context and tasks: read it first when the question is about plans, priorities or why something was decided. " +
 		"Use list_events to see meetings in a time range and which transcripts belong to them. " +
 		"Dates without an offset are in " + calendar.DefaultZone().String() + ".")
 	return b.String()

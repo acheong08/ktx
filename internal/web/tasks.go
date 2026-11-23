@@ -21,7 +21,8 @@ type taskRow struct {
 	Mine    bool
 	Due     string // "" when there's none
 	Overdue bool
-	URL     string // /tasks/<owner>/<calendar>/<file>
+	URL     string     // /tasks/<owner>/<calendar>/<file>
+	For     *refOption // the goal or decision it's for, if visible
 }
 
 type tasksView struct {
@@ -36,7 +37,7 @@ type tasksView struct {
 	Flash    flash
 	// The add form, kept when it fails.
 	Title, DueDate, DueTime, Into, Repeat, Tags, Notes string
-	KnownTags                                   []string // tags on the tasks shown, for suggestions
+	KnownTags                                          []string // tags on the tasks shown, for suggestions
 }
 
 // parseTags reads a comma-separated tag list, dropping blanks and repeats
@@ -135,6 +136,18 @@ func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
 			calendar.SortManually(tasks, order)
 		}
 	}
+	targets := map[string]refOption{}
+	if u.notes != nil {
+		all, err := u.notes.List()
+		if err != nil {
+			return v, err
+		}
+		for _, n := range all {
+			if n.IsNode() && n.Visible(viewer(r)) {
+				targets["note:"+n.ID] = refOption{"/notes/" + n.ID, n.Title}
+			}
+		}
+	}
 	now := time.Now()
 	seen := map[string]bool{}
 	for _, t := range tasks {
@@ -155,8 +168,12 @@ func (u *UI) tasksView(r *http.Request, all, showDone bool) (tasksView, error) {
 				continue
 			}
 		}
-		v.Rows = append(v.Rows, taskRow{T: t, Mine: t.Calendar.Owner == owner && !t.ReadOnly, Due: fmtDue(t, now),
-			Overdue: t.Overdue(now), URL: taskURL(t.Calendar, t.Name)})
+		row := taskRow{T: t, Mine: t.Calendar.Owner == owner && !t.ReadOnly, Due: fmtDue(t, now),
+			Overdue: t.Overdue(now), URL: taskURL(t.Calendar, t.Name)}
+		if o, ok := targets[t.For]; ok {
+			row.For = &o
+		}
+		v.Rows = append(v.Rows, row)
 	}
 	return v, nil
 }
@@ -413,13 +430,15 @@ type taskFormView struct {
 	URL                            string
 	Title, DueDate, DueTime, Notes string
 	Tags, Repeat                   string
+	For                            string      // "note:<id>"
+	Targets                        []refOption // goals and decisions it can be for
 	Done                           bool
 	Flash                          flash
 }
 
 func taskForm(c chrome, t calendar.ToDo, mine bool) taskFormView {
 	v := taskFormView{Chrome: c, T: t, Mine: mine, URL: taskURL(t.Calendar, t.Name),
-		Title: t.Summary, Notes: t.Description, Tags: strings.Join(t.Categories, ", "), Done: t.Done, Repeat: t.Rule}
+		Title: t.Summary, Notes: t.Description, Tags: strings.Join(t.Categories, ", "), Done: t.Done, Repeat: t.Rule, For: t.For}
 	if !t.Due.IsZero() {
 		if t.DueAllDay {
 			v.DueDate = t.Due.Format("2006-01-02")
@@ -436,7 +455,12 @@ func (u *UI) taskPage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	u.render(w, r, http.StatusOK, taskPage(taskForm(u.chrome(r, "tasks"), t, mine)))
+	v := taskForm(u.chrome(r, "tasks"), t, mine)
+	if err := u.addTargets(r, &v); err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	u.render(w, r, http.StatusOK, taskPage(v))
 }
 
 func (u *UI) saveTask(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +473,11 @@ func (u *UI) saveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := taskForm(u.chrome(r, "tasks"), t, mine)
+	v.For = r.PostFormValue("for")
+	if err := u.addTargets(r, &v); err != nil {
+		u.fail(w, r, err)
+		return
+	}
 	v.Title, v.DueDate, v.DueTime = r.PostFormValue("title"), r.PostFormValue("due_date"), r.PostFormValue("due_time")
 	v.Notes, v.Tags, v.Done = r.PostFormValue("notes"), r.PostFormValue("tags"), r.PostFormValue("done") == "1"
 	v.Repeat = r.PostFormValue("repeat")
@@ -460,6 +489,9 @@ func (u *UI) saveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	t.ETag = r.PostFormValue("etag")
 	t.Summary, t.Due, t.DueAllDay, t.Done, t.Rule = v.Title, due, allDay, v.Done, v.Repeat
+	if v.For == "" || slices.ContainsFunc(v.Targets, func(o refOption) bool { return o.Ref == v.For }) {
+		t.For = v.For // only goals and decisions this person can see
+	}
 	t.Description = strings.ReplaceAll(v.Notes, "\r\n", "\n")
 	t.Categories = parseTags(v.Tags)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
@@ -536,4 +568,15 @@ func notePreview(notes string) string {
 		s = strings.TrimSpace(string(r[:cut])) + "…"
 	}
 	return s
+}
+
+// addTargets fills in the goals and decisions a task can be for (none
+// when notes are off).
+func (u *UI) addTargets(r *http.Request, v *taskFormView) error {
+	if u.notes == nil {
+		return nil
+	}
+	targets, err := u.graphTargets(r, v.T.For)
+	v.Targets = targets
+	return err
 }

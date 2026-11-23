@@ -174,6 +174,8 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("GET /notes/{id}/edit", u.page(u.editNote))
 		mux.HandleFunc("POST /notes/{id}", u.page(u.saveNote))
 		mux.HandleFunc("POST /notes/{id}/delete", u.page(u.deleteNote))
+		mux.HandleFunc("GET /graph", u.page(u.graphPage))
+		mux.HandleFunc("GET /graph/refs", u.page(u.refSearch))
 	}
 	if u.auth != nil && u.notes != nil {
 		mux.HandleFunc("GET /settings/labels", u.page(u.labelsPage))
@@ -497,6 +499,8 @@ type detailView struct {
 	BackLabel string
 	Flash     flash
 	Events    []eventChoice // nil: no calendar
+	Leads     []notes.Note  // notes, goals and decisions based on this call
+	Notes     bool          // notes are on: offer "add a goal or decision"
 }
 
 func (u *UI) detail(w http.ResponseWriter, r *http.Request) {
@@ -537,6 +541,14 @@ func (u *UI) renderDetail(w http.ResponseWriter, r *http.Request, status int, id
 	}
 	if u.cal != nil && e.ID != "" {
 		v.Events = u.eventChoices(e)
+	}
+	if u.notes != nil && e.ID != "" {
+		all, err := u.notes.List()
+		if err != nil {
+			u.fail(w, r, err)
+			return
+		}
+		v.Notes, v.Leads = true, notes.BasedOnThis(all, "transcript:"+e.ID, viewer(r))
 	}
 	u.render(w, r, status, detailPage(v))
 }

@@ -20,16 +20,20 @@ type notesView struct {
 	Chrome chrome
 	Q      string
 	Label  string // filter: only notes with this label
+	Kind   string // filter: "" all, "plain", "goal", "decision"
+	Kinds  []tab
+	Graph  graphFieldsView // the scratchpad's goal/decision block
 	Notes  []notes.Note
 	Labels []notes.Label // defined labels, with counts
 	Tabs   []tab
-	Draft  string   // the scratchpad, kept when saving failed
+	Draft  string // the scratchpad, kept when saving failed
+	Title  string
 	Picked []string // labels ticked on the scratchpad
 	Flash  flash
 	AIOff  bool // titles come from the first line
 }
 
-func (u *UI) notesView(r *http.Request, q, label string) (notesView, error) {
+func (u *UI) notesView(r *http.Request, q, label, kind string) (notesView, error) {
 	all, err := u.notes.List()
 	if err != nil {
 		return notesView{}, err
@@ -38,11 +42,21 @@ func (u *UI) notesView(r *http.Request, q, label string) (notesView, error) {
 	if err != nil {
 		return notesView{}, err
 	}
-	v := notesView{Chrome: u.chrome(r, "notes"), Q: q, Label: label, Labels: defs}
+	v := notesView{Chrome: u.chrome(r, "notes"), Q: q, Label: label, Kind: kind, Labels: defs}
 	counts := map[string]int{}
+	kinds := map[string]int{}
 	total := 0
+	who := viewer(r)
 	for _, n := range all {
-		if !n.Matches(q) {
+		if !n.Visible(who) || !n.Matches(q) {
+			continue
+		}
+		k := n.Kind
+		if k == "" {
+			k = "plain"
+		}
+		kinds[k]++
+		if kind != "" && kind != k {
 			continue
 		}
 		total++
@@ -53,9 +67,13 @@ func (u *UI) notesView(r *http.Request, q, label string) (notesView, error) {
 			v.Notes = append(v.Notes, n)
 		}
 	}
-	v.Tabs = append(v.Tabs, tab{Label: "All", URL: notesURL(q, ""), Count: total, Active: label == ""})
+	v.Tabs = append(v.Tabs, tab{Label: "All", URL: notesKindURL(q, "", kind), Count: total, Active: label == ""})
 	for _, d := range defs {
-		v.Tabs = append(v.Tabs, tab{Label: d.Name, URL: notesURL(q, d.Name), Count: counts[d.Name], Active: label == d.Name})
+		v.Tabs = append(v.Tabs, tab{Label: d.Name, URL: notesKindURL(q, d.Name, kind), Count: counts[d.Name], Active: label == d.Name})
+	}
+	v.Kinds = append(v.Kinds, tab{Label: "Everything", URL: notesKindURL(q, label, ""), Count: kinds["plain"] + kinds["goal"] + kinds["decision"], Active: kind == ""})
+	for _, k := range []struct{ id, name string }{{"plain", "Notes"}, {"goal", "Goals"}, {"decision", "Decisions"}} {
+		v.Kinds = append(v.Kinds, tab{Label: k.name, URL: notesKindURL(q, label, k.id), Count: kinds[k.id], Active: kind == k.id})
 	}
 	if u.ai != nil {
 		st, err := u.ai.Status()
@@ -67,10 +85,30 @@ func (u *UI) notesView(r *http.Request, q, label string) (notesView, error) {
 }
 
 func (u *UI) notesPage(w http.ResponseWriter, r *http.Request) {
-	v, err := u.notesView(r, r.URL.Query().Get("q"), r.URL.Query().Get("label"))
+	query := r.URL.Query()
+	v, err := u.notesView(r, query.Get("q"), query.Get("label"), query.Get("kind"))
 	if err != nil {
 		u.fail(w, r, err)
 		return
+	}
+	// "Add a goal or decision based on this" links prefill the scratchpad.
+	if ref := query.Get("based_on"); ref != "" || query.Get("new_kind") != "" {
+		all, err := u.notes.List()
+		if err != nil {
+			u.fail(w, r, err)
+			return
+		}
+		rr, err := u.resolver(r, all)
+		if err != nil {
+			u.fail(w, r, err)
+			return
+		}
+		f := notes.Fields{Kind: query.Get("new_kind")}
+		if ref != "" {
+			f.BasedOn = []notes.Ref{{Ref: ref}}
+		}
+		v.Graph = u.graphFieldsOf(rr, f)
+		v.Graph.Open = true
 	}
 	if r.URL.Query().Get("deleted") != "" {
 		v.Flash = flash{"ok", "Note deleted. It stays in git history."}
@@ -86,13 +124,20 @@ func (u *UI) notesPage(w http.ResponseWriter, r *http.Request) {
 func (u *UI) createNote(w http.ResponseWriter, r *http.Request) {
 	body := r.PostFormValue("body")
 	picked := r.PostForm["labels"]
-	if _, err := u.notes.Submit(body, actor(r), picked); err != nil {
-		v, verr := u.notesView(r, "", "")
+	fields := fieldsFromForm(r)
+	if _, err := u.notes.SubmitNote(notes.Submission{Body: body, Author: actor(r), Labels: picked,
+		Title: r.PostFormValue("title"), Fields: fields}); err != nil {
+		v, verr := u.notesView(r, "", "", "")
 		if verr != nil {
 			u.fail(w, r, verr)
 			return
 		}
+		all, _ := u.notes.List()
+		if rr, rerr := u.resolver(r, all); rerr == nil {
+			v.Graph = u.graphFieldsOf(rr, fields)
+		}
 		v.Draft, v.Picked, v.Flash = body, picked, flash{"error", err.Error()}
+		v.Title = r.PostFormValue("title")
 		u.render(w, r, http.StatusUnprocessableEntity, notesListPage(v))
 		return
 	}
@@ -102,6 +147,9 @@ func (u *UI) createNote(w http.ResponseWriter, r *http.Request) {
 // note returns the note named in the path, or writes a 404.
 func (u *UI) note(w http.ResponseWriter, r *http.Request) (notes.Note, bool) {
 	n, err := u.notes.Get(r.PathValue("id"))
+	if err == nil && !n.Visible(viewer(r)) {
+		err = notes.ErrNotFound // private to someone else
+	}
 	if errors.Is(err, notes.ErrNotFound) {
 		u.render(w, r, http.StatusNotFound, errorPage(u.chrome(r, "notes"), "No note with that id. It may have been deleted."))
 		return n, false
@@ -117,6 +165,9 @@ type noteView struct {
 	Chrome   chrome
 	Note     notes.Note
 	Labels   []notes.Label
+	BasedOn  []refView    // what it's based on
+	Leads    []notes.Note // what's based on it
+	Tasks    []graphTask  // tasks for it
 	BodyHTML string
 	Flash    flash
 }
@@ -137,6 +188,26 @@ func (u *UI) noteDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := noteView{Chrome: u.chrome(r, "notes"), Note: n, Labels: defs, BodyHTML: body.String()}
+	all, err := u.notes.List()
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	rr, err := u.resolver(r, all)
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	v.BasedOn = rr.resolve(n.BasedOn)
+	v.Leads = notes.BasedOnThis(all, "note:"+n.ID, viewer(r))
+	if n.IsNode() {
+		tasks, err := u.tasksFor()
+		if err != nil {
+			u.fail(w, r, err)
+			return
+		}
+		v.Tasks = tasks["note:"+n.ID]
+	}
 	if n.Pending && n.Error != "" {
 		v.Flash = flash{"warn", "Saving this note failed and will be retried: " + n.Error}
 	}
@@ -165,6 +236,7 @@ type noteFormView struct {
 	Title, Body string
 	Labels      []notes.Label // defined, plus any the note has that aren't
 	Picked      []string
+	Graph       graphFieldsView
 	Error       string
 }
 
@@ -197,14 +269,32 @@ func (u *UI) editNote(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, r, err)
 		return
 	}
-	u.render(w, r, http.StatusOK, noteForm(noteFormView{Chrome: u.chrome(r, "notes"), ID: n.ID, Title: n.Title, Body: n.Body, Labels: labels, Picked: n.Labels}))
+	all, err := u.notes.List()
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	rr, err := u.resolver(r, all)
+	if err != nil {
+		u.fail(w, r, err)
+		return
+	}
+	g := u.graphFieldsOf(rr, n.Fields)
+	g.Open = true
+	u.render(w, r, http.StatusOK, noteForm(noteFormView{Chrome: u.chrome(r, "notes"), ID: n.ID, Title: n.Title, Body: n.Body, Labels: labels, Picked: n.Labels, Graph: g}))
 }
 
 func (u *UI) saveNote(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	n, ok := u.note(w, r)
+	if !ok {
+		return
+	}
+	id := n.ID
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
-	_, err := u.notes.Edit(ctx, id, r.PostFormValue("title"), r.PostFormValue("body"), r.PostForm["labels"], actor(r))
+	fields := fieldsFromForm(r)
+	_, err := u.notes.Edit(ctx, id, notes.Changes{Title: r.PostFormValue("title"), Body: r.PostFormValue("body"),
+		Labels: r.PostForm["labels"], Fields: fields}, actor(r))
 	switch {
 	case errors.Is(err, notes.ErrNotFound):
 		u.render(w, r, http.StatusNotFound, errorPage(u.chrome(r, "notes"), "No note with that id. It may have been deleted."))
@@ -213,9 +303,16 @@ func (u *UI) saveNote(w http.ResponseWriter, r *http.Request) {
 			u.log.Warn("editing note", "id", id, "err", err)
 		}
 		labels, _ := u.formLabels(r.PostForm["labels"])
+		var g graphFieldsView
+		if all, lerr := u.notes.List(); lerr == nil {
+			if rr, rerr := u.resolver(r, all); rerr == nil {
+				g = u.graphFieldsOf(rr, fields)
+			}
+		}
+		g.Open = true
 		u.render(w, r, http.StatusUnprocessableEntity, noteForm(noteFormView{
 			Chrome: u.chrome(r, "notes"), ID: id, Title: r.PostFormValue("title"), Body: r.PostFormValue("body"),
-			Labels: labels, Picked: r.PostForm["labels"], Error: err.Error(),
+			Labels: labels, Picked: r.PostForm["labels"], Graph: g, Error: err.Error(),
 		}))
 	default:
 		http.Redirect(w, r, "/notes/"+id, http.StatusSeeOther)
@@ -223,7 +320,11 @@ func (u *UI) saveNote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *UI) deleteNote(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	n, ok := u.note(w, r)
+	if !ok {
+		return
+	}
+	id := n.ID
 	if r.PostFormValue("confirm") == "" {
 		http.Redirect(w, r, "/notes/"+id, http.StatusSeeOther)
 		return
@@ -331,13 +432,18 @@ func keyPlaceholder(v aiView) string {
 	return ""
 }
 
-func notesURL(q, label string) string {
+func notesURL(q, label string) string { return notesKindURL(q, label, "") }
+
+func notesKindURL(q, label, kind string) string {
 	v := url.Values{}
 	if q != "" {
 		v.Set("q", q)
 	}
 	if label != "" {
 		v.Set("label", label)
+	}
+	if kind != "" {
+		v.Set("kind", kind)
 	}
 	if len(v) == 0 {
 		return "/notes"

@@ -56,6 +56,7 @@ type PendingNote struct {
 	Labels    []string // picked by the author
 	Title     string   // given by the writer; "" means generate one
 	Via       string   // what wrote it, e.g. "MCP: <app>"; "" for the web UI
+	Meta      string   // other fields, as JSON (package notes)
 	CreatedAt time.Time
 	Attempts  int
 	Error     string // the last failure, if any
@@ -63,14 +64,14 @@ type PendingNote struct {
 
 // AddPendingNote queues a note.
 func (s *DB) AddPendingNote(n PendingNote) error {
-	_, err := s.db.Exec(`INSERT INTO pending_notes (id, author, body, labels, title, via, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		n.ID, n.Author, n.Body, strings.Join(n.Labels, ","), n.Title, n.Via, n.CreatedAt.UTC().Format(time.RFC3339))
+	_, err := s.db.Exec(`INSERT INTO pending_notes (id, author, body, labels, title, via, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.Author, n.Body, strings.Join(n.Labels, ","), n.Title, n.Via, n.Meta, n.CreatedAt.UTC().Format(time.RFC3339))
 	return err
 }
 
 // PendingNotes lists queued notes, oldest first.
 func (s *DB) PendingNotes() ([]PendingNote, error) {
-	rows, err := s.db.Query(`SELECT id, author, body, labels, title, via, created_at, attempts, error FROM pending_notes ORDER BY created_at, id`)
+	rows, err := s.db.Query(`SELECT id, author, body, labels, title, via, meta, created_at, attempts, error FROM pending_notes ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +81,7 @@ func (s *DB) PendingNotes() ([]PendingNote, error) {
 		var n PendingNote
 		var created sql.NullString
 		var labels string
-		if err := rows.Scan(&n.ID, &n.Author, &n.Body, &labels, &n.Title, &n.Via, &created, &n.Attempts, &n.Error); err != nil {
+		if err := rows.Scan(&n.ID, &n.Author, &n.Body, &labels, &n.Title, &n.Via, &n.Meta, &created, &n.Attempts, &n.Error); err != nil {
 			return nil, err
 		}
 		n.CreatedAt, n.Labels = parseTime(created), splitLabels(labels)
@@ -94,8 +95,8 @@ func (s *DB) PendingNote(id string) (PendingNote, error) {
 	var n PendingNote
 	var created sql.NullString
 	var labels string
-	err := s.db.QueryRow(`SELECT id, author, body, labels, title, via, created_at, attempts, error FROM pending_notes WHERE id = ?`, id).
-		Scan(&n.ID, &n.Author, &n.Body, &labels, &n.Title, &n.Via, &created, &n.Attempts, &n.Error)
+	err := s.db.QueryRow(`SELECT id, author, body, labels, title, via, meta, created_at, attempts, error FROM pending_notes WHERE id = ?`, id).
+		Scan(&n.ID, &n.Author, &n.Body, &labels, &n.Title, &n.Via, &n.Meta, &created, &n.Attempts, &n.Error)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PendingNote{}, ErrNotFound
 	}

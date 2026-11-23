@@ -147,7 +147,7 @@ func TestNoteTitledByModelAndCommitted(t *testing.T) {
 	if list, _ := e.svc.List(); len(list) != 1 || !list[0].Pending || list[0].Title != "" {
 		t.Fatalf("pending list: %+v", list)
 	}
-	if _, err := e.svc.Edit(context.Background(), id, "x", "y", nil, "antonio"); err != ErrPending {
+	if _, err := e.svc.Edit(context.Background(), id, Changes{Title: "x", Body: "y"}, "antonio"); err != ErrPending {
 		t.Fatalf("edit while pending: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestNoteTitledByModelAndCommitted(t *testing.T) {
 	}
 
 	// Edit renames the file; delete removes it.
-	n, err = e.svc.Edit(context.Background(), id, "Acme pricing", "Usage-based.\r\n", nil, "maxim")
+	n, err = e.svc.Edit(context.Background(), id, Changes{Title: "Acme pricing", Body: "Usage-based.\r\n"}, "maxim")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestLabels(t *testing.T) {
 		t.Fatalf("delete in use: %v", err)
 	}
 	// Take it off by editing, then delete.
-	if n, err = e.svc.Edit(ctx, id, n.Title, n.Body, []string{"competitors"}, "maxim"); err != nil || strings.Join(n.Labels, ",") != "competitors" {
+	if n, err = e.svc.Edit(ctx, id, Changes{Title: n.Title, Body: n.Body, Labels: []string{"competitors"}}, "maxim"); err != nil || strings.Join(n.Labels, ",") != "competitors" {
 		t.Fatalf("edit labels: %v %v", n.Labels, err)
 	}
 	if err := e.svc.DeleteLabel(ctx, "slop", "antonio"); err != nil {
@@ -377,7 +377,7 @@ func TestSubmitNoteWithTitleAndVia(t *testing.T) {
 		t.Fatalf("commit:\n%s", log)
 	}
 	// Editing keeps where it came from.
-	if n, err = e.svc.Edit(ctx, id, "Reviewed", "Agent notes.", nil, "antonio"); err != nil || n.Via != "MCP: Harness" {
+	if n, err = e.svc.Edit(ctx, id, Changes{Title: "Reviewed", Body: "Agent notes."}, "antonio"); err != nil || n.Via != "MCP: Harness" {
 		t.Fatalf("edit: %+v %v", n, err)
 	}
 }

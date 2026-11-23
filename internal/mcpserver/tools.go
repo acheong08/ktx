@@ -28,6 +28,7 @@ func (i listTypesIn) intentText() string     { return i.Intent }
 func (i listCalendarsIn) intentText() string { return i.Intent }
 func (i listEventsIn) intentText() string    { return i.Intent }
 func (i searchNotesIn) intentText() string   { return i.Intent }
+func (i getGraphIn) intentText() string      { return i.Intent }
 func (i getNoteIn) intentText() string       { return i.Intent }
 func (i listLabelsIn) intentText() string    { return i.Intent }
 func (i createNoteIn) intentText() string    { return i.Intent }
@@ -85,8 +86,16 @@ func (s *Server) addTools(srv *mcp.Server, c caller) {
 			Name:  "search_notes",
 			Title: "Search notes",
 			Description: "Find notes people wrote in ktx (separate from transcripts), newest first. All filters are optional. " +
-				"Returns titles, authors, labels and, with a query, a snippet; read one with get_note. See list_note_labels for what labels mean.",
-		}, s.searchNotes)
+				"Returns titles, authors, labels, and for goals and decisions their status, strength and what they're based on; " +
+				"with a query, a snippet. Read one with get_note. See list_note_labels for what labels mean, and get_graph for the goals and decisions as a tree.",
+		}, func(ctx context.Context, in searchNotesIn) (searchNotesOut, error) { return s.searchNotes(ctx, in, c) })
+		addTool(srv, s, c, &mcp.Tool{
+			Name:  "get_graph",
+			Title: "Goals and decisions",
+			Description: "The team's goals and decisions as an outline: each with its status and strength, what it's based on " +
+				"(other goals and decisions, notes, and calls, with quotes of what was said) and the tasks for it. " +
+				"Read this to understand what the user is trying to achieve and why, before suggesting work.",
+		}, func(ctx context.Context, in getGraphIn) (getGraphOut, error) { return s.getGraph(ctx, in, c) })
 		addTool(srv, s, c, &mcp.Tool{
 			Name:  "create_note",
 			Title: "Write a note",
@@ -98,10 +107,11 @@ func (s *Server) addTools(srv *mcp.Server, c caller) {
 			return s.createNote(ctx, in, c)
 		})
 		addTool(srv, s, c, &mcp.Tool{
-			Name:        "get_note",
-			Title:       "Read a note",
-			Description: "Read one note: its title, author, dates and text (Markdown).",
-		}, s.getNote)
+			Name:  "get_note",
+			Title: "Read a note",
+			Description: "Read one note: its title, author, dates and text (Markdown); for a goal or decision also its status, " +
+				"strength, what it's based on and what's based on it.",
+		}, func(ctx context.Context, in getNoteIn) (getNoteOut, error) { return s.getNote(ctx, in, c) })
 	}
 	if s.cal == nil {
 		return
@@ -613,19 +623,25 @@ func linkKey(uid, rid string) string {
 // --- notes -----------------------------------------------------------------
 
 type noteSummary struct {
-	Via       string   `json:"via,omitempty" jsonschema:"what wrote it, e.g. MCP: <app>; empty for a person"`
-	ID        string   `json:"id"`
-	Title     string   `json:"title" jsonschema:"empty while the note is still being saved"`
-	Created   string   `json:"created"`
-	Author    string   `json:"author"`
-	Labels    []string `json:"labels,omitempty" jsonschema:"see list_note_labels for what each means"`
-	Pending   bool     `json:"pending,omitempty" jsonschema:"just written: its title and suggested labels are being generated and it isn't in git yet"`
-	TextBytes int      `json:"text_bytes"`
-	Snippet   string   `json:"snippet,omitempty"`
+	Via       string      `json:"via,omitempty" jsonschema:"what wrote it, e.g. MCP: <app>; empty for a person"`
+	ID        string      `json:"id"`
+	Title     string      `json:"title" jsonschema:"empty while the note is still being saved"`
+	Created   string      `json:"created"`
+	Author    string      `json:"author"`
+	Labels    []string    `json:"labels,omitempty" jsonschema:"see list_note_labels for what each means"`
+	Kind      string      `json:"kind,omitempty" jsonschema:"goal or decision; empty for a plain note (context)"`
+	Status    string      `json:"status,omitempty" jsonschema:"goal: active, achieved, paused, dropped; decision: considering, made, rejected, reversed"`
+	Strength  string      `json:"strength,omitempty" jsonschema:"how firmly it's held: hard, firm, tentative"`
+	Private   bool        `json:"private,omitempty" jsonschema:"only its author sees it; you're acting for them"`
+	BasedOn   []notes.Ref `json:"based_on,omitempty" jsonschema:"what it rests on: note:<id> (read with get_note) or transcript:<id> (get_transcript), with a quote"`
+	Pending   bool        `json:"pending,omitempty" jsonschema:"just written: its title and suggested labels are being generated and it isn't in git yet"`
+	TextBytes int         `json:"text_bytes"`
+	Snippet   string      `json:"snippet,omitempty"`
 }
 
 func summarizeNote(n notes.Note) noteSummary {
-	return noteSummary{Via: n.Via, ID: n.ID, Title: n.Title, Created: formatTime(n.Created), Author: n.Author, Labels: n.Labels, Pending: n.Pending, TextBytes: len(n.Body)}
+	return noteSummary{Via: n.Via, ID: n.ID, Title: n.Title, Created: formatTime(n.Created), Author: n.Author, Labels: n.Labels, Pending: n.Pending, TextBytes: len(n.Body),
+		Kind: n.Kind, Status: n.Status, Strength: n.Strength, Private: n.Private, BasedOn: n.BasedOn}
 }
 
 type searchNotesIn struct {
@@ -634,6 +650,7 @@ type searchNotesIn struct {
 	Author  string `json:"author,omitempty" jsonschema:"only notes by this person (ktx username)"`
 	Label   string `json:"label,omitempty" jsonschema:"only notes with this label (see list_note_labels)"`
 	NoLabel string `json:"without_label,omitempty" jsonschema:"leave out notes with this label, e.g. to skip unreviewed ones"`
+	Kind    string `json:"kind,omitempty" jsonschema:"only goals (goal), decisions (decision) or plain notes (plain)"`
 	From    string `json:"from,omitempty" jsonschema:"only notes written on or after this date (YYYY-MM-DD) or time (RFC 3339)"`
 	To      string `json:"to,omitempty" jsonschema:"only notes written up to and including this date, or before this time"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"how many to return (default 20, at most 100)"`
@@ -646,7 +663,8 @@ type searchNotesOut struct {
 	NextOffset int           `json:"next_offset,omitempty"`
 }
 
-func (s *Server) searchNotes(_ context.Context, in searchNotesIn) (searchNotesOut, error) {
+func (s *Server) searchNotes(_ context.Context, in searchNotesIn, c caller) (searchNotesOut, error) {
+	kind := strings.ToLower(strings.TrimSpace(in.Kind))
 	var from, to time.Time
 	var err error
 	if in.From != "" {
@@ -671,8 +689,14 @@ func (s *Server) searchNotes(_ context.Context, in searchNotesIn) (searchNotesOu
 	}
 	out := searchNotesOut{Notes: []noteSummary{}}
 	for _, n := range all {
+		k := n.Kind
+		if k == "" {
+			k = "plain"
+		}
 		switch {
-		case in.Author != "" && !strings.EqualFold(n.Author, strings.TrimSpace(in.Author)),
+		case !n.Visible(c.user.Display()),
+			kind != "" && k != kind,
+			in.Author != "" && !strings.EqualFold(n.Author, strings.TrimSpace(in.Author)),
 			in.Label != "" && !slices.Contains(n.Labels, strings.ToLower(strings.TrimSpace(in.Label))),
 			in.NoLabel != "" && slices.Contains(n.Labels, strings.ToLower(strings.TrimSpace(in.NoLabel))),
 			!from.IsZero() && n.Created.Before(from),
@@ -701,25 +725,37 @@ type getNoteIn struct {
 
 type getNoteOut struct {
 	noteSummary
-	Path     string `json:"path,omitempty" jsonschema:"file in the company-brain repository"`
-	EditedBy string `json:"edited_by,omitempty"`
-	EditedAt string `json:"edited_at,omitempty"`
-	Text     string `json:"text"`
+	Path     string        `json:"path,omitempty" jsonschema:"file in the company-brain repository"`
+	EditedBy string        `json:"edited_by,omitempty"`
+	EditedAt string        `json:"edited_at,omitempty"`
+	Text     string        `json:"text"`
+	LeadsTo  []noteSummary `json:"based_on_this,omitempty" jsonschema:"notes, goals and decisions based on this one"`
 }
 
-func (s *Server) getNote(_ context.Context, in getNoteIn) (getNoteOut, error) {
+func (s *Server) getNote(_ context.Context, in getNoteIn, c caller) (getNoteOut, error) {
 	id := strings.ToLower(strings.TrimSpace(in.ID))
 	if !notes.ValidID(id) {
 		return getNoteOut{}, fmt.Errorf("%q is not a note id (12 hex characters)", in.ID)
 	}
 	n, err := s.notes.Get(id)
+	if err == nil && !n.Visible(c.user.Display()) {
+		err = notes.ErrNotFound
+	}
 	if errors.Is(err, notes.ErrNotFound) {
 		return getNoteOut{}, fmt.Errorf("no note with id %s", id)
 	}
 	if err != nil {
 		return getNoteOut{}, err
 	}
-	return getNoteOut{noteSummary: summarizeNote(n), Path: n.Path, EditedBy: n.EditedBy, EditedAt: n.EditedAt, Text: n.Body}, nil
+	out := getNoteOut{noteSummary: summarizeNote(n), Path: n.Path, EditedBy: n.EditedBy, EditedAt: n.EditedAt, Text: n.Body}
+	all, err := s.notes.List()
+	if err != nil {
+		return getNoteOut{}, err
+	}
+	for _, l := range notes.BasedOnThis(all, "note:"+n.ID, c.user.Display()) {
+		out.LeadsTo = append(out.LeadsTo, summarizeNote(l))
+	}
+	return out, nil
 }
 
 type listLabelsIn struct {

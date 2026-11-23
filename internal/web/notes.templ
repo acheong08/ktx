@@ -13,6 +13,7 @@ templ notesListPage(v notesView) {
 			<label for="note-body" class="visually-hidden">New note</label>
 			<textarea id="note-body" name="body" rows="8" placeholder="Write anything… (Markdown)" required autofocus data-ctrl-enter-submits>{ v.Draft }</textarea>
 			@labelPicker(v.Labels, v.Picked)
+			@graphFields(v.Graph, true, v.Title)
 			<div class="scratchpad-actions">
 				<button type="submit" class="primary">Save note</button>
 				<span class="help">
@@ -38,6 +39,13 @@ templ notesListPage(v notesView) {
 
 templ noteResults(v notesView) {
 	@flashBox(v.Flash)
+	<nav class="kinds" aria-label="Kinds">
+		for _, t := range v.Kinds {
+			<a href={ templ.URL(t.URL) } hx-get={ t.URL } hx-target="#note-results" hx-push-url="true" class={ templ.KV("active", t.Active) }>
+				{ t.Label } <span class="count">{ strconv.Itoa(t.Count) }</span>
+			</a>
+		}
+	</nav>
 	if len(v.Tabs) > 1 {
 		<nav class="tabs" aria-label="Labels">
 			for _, t := range v.Tabs {
@@ -70,6 +78,11 @@ templ noteResults(v notesView) {
 								<a href={ templ.URL("/notes/" + n.ID) }>
 									@noteTitle(n, false)
 								</a>
+								if n.Kind != "" || n.Private {
+									<div class="chips">
+										@nodeTags(n.Fields)
+									</div>
+								}
 								if len(n.Labels) > 0 {
 									<div class="chips">
 										@labelChips(v.Labels, n.Labels)
@@ -107,8 +120,9 @@ templ noteDetailPage(v noteView) {
 			<h1>
 				@noteTitle(v.Note, true)
 			</h1>
-			if len(v.Note.Labels) > 0 {
-				<p>
+			if v.Note.Kind != "" || v.Note.Private || len(v.Note.Labels) > 0 {
+				<p class="chips">
+					@nodeTags(v.Note.Fields)
 					@labelChips(v.Labels, v.Note.Labels)
 				</p>
 			}
@@ -131,6 +145,36 @@ templ noteDetailPage(v noteView) {
 			<div class="body">
 				@templ.Raw(v.BodyHTML)
 			</div>
+			if len(v.BasedOn) > 0 {
+				<h2>Based on</h2>
+				@refList(v.BasedOn)
+			}
+			if v.Note.IsNode() {
+				<h2>Tasks for it</h2>
+				if len(v.Tasks) == 0 {
+					<p class="muted">None. On a task's page, set “For” to this { v.Note.Kind }.</p>
+				} else {
+					<ul class="node-tasks">
+						for _, t := range v.Tasks {
+							<li class={ templ.KV("done", t.T.Done) }>
+								if t.T.Done {
+									☑
+								} else {
+									☐
+								}
+								<a href={ templ.URL(t.URL) }>{ t.T.Summary }</a>
+							</li>
+						}
+					</ul>
+				}
+			}
+			if len(v.Leads) > 0 {
+				<h2>Based on this</h2>
+				@leadsList(v.Leads)
+			}
+			if !v.Note.Pending {
+				<p><a class="button" href={ templ.URL("/notes?based_on=note:" + v.Note.ID + "#note-body") }>Add a goal or decision based on this</a></p>
+			}
 			if !v.Note.Pending {
 				<form method="post" class="danger" action={ templ.URL("/notes/" + v.Note.ID + "/delete") }>
 					<label class="check"><input type="checkbox" name="confirm" required/> Delete this note. It stays in git history.</label>
@@ -154,6 +198,7 @@ templ noteForm(v noteFormView) {
 			<label for="body">Note (Markdown)</label>
 			<textarea id="body" name="body" rows="20" required data-ctrl-enter-submits>{ v.Body }</textarea>
 			@labelPicker(v.Labels, v.Picked)
+			@graphFields(v.Graph, false, "")
 			<button type="submit" class="primary">Save</button>
 		</form>
 	}

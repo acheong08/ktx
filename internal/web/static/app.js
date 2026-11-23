@@ -136,3 +136,46 @@ document.addEventListener("keydown", (e) => {
     save(list);
   });
 })();
+
+// Goal/decision block of the note forms (data-graph-fields).
+// The kind select shows the status select for that kind (the other is
+// disabled, so it isn't submitted) and the strength.
+function syncKind(block) {
+  const kind = block.querySelector("[data-kind-select]")?.value || "";
+  block.dataset.kind = kind;
+  block.querySelectorAll("[data-status-for]").forEach((el) => {
+    const on = el.dataset.statusFor === kind;
+    el.hidden = !on;
+    el.querySelector("select").disabled = !on;
+  });
+  block.querySelectorAll(".node-only:not([data-status-for])").forEach((el) => (el.hidden = kind === ""));
+}
+document.addEventListener("change", (e) => {
+  if (e.target.matches("[data-kind-select]")) syncKind(e.target.closest("[data-graph-fields]"));
+});
+// "Based on" picker: a search result adds a row; × removes one; Enter in
+// the search box doesn't submit the note.
+document.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-add-ref]");
+  if (add) {
+    const block = add.closest("[data-graph-fields]");
+    const rows = block.querySelector("[data-ref-rows]");
+    const exists = [...rows.querySelectorAll('input[name="ref"]')].some((i) => i.value === add.dataset.addRef);
+    if (!exists) {
+      const row = block.querySelector("[data-ref-row-template]").content.firstElementChild.cloneNode(true);
+      row.querySelector('input[name="ref"]').value = add.dataset.addRef;
+      row.querySelector(".ref-label").textContent = add.dataset.refLabel;
+      rows.append(row);
+      row.querySelector('input[name="quote"]').focus();
+    }
+    add.parentElement.replaceChildren();
+    const search = block.querySelector("[data-ref-search]");
+    if (search) search.value = "";
+    return;
+  }
+  const remove = e.target.closest("[data-remove-row]");
+  if (remove) remove.closest(".ref-row").remove();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.matches("[data-ref-search]")) e.preventDefault();
+});
