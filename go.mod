@@ -3,7 +3,7 @@ module github.com/acheong08/ktx
 go 1.27.4
 
 require (
-	charm.land/fantasy v0.48.1
+	charm.land/fantasy v0.48.2
 	github.com/a-h/templ v0.3.1118
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/emersion/go-ical v0.0.0-20261112170022-46c5b53a1723
