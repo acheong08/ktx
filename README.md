@@ -221,6 +221,10 @@ Every tool requires an `intent`: one sentence on why the call is made. It is wri
 
 A connection is a service ktx pulls from, with one person's credential. You add them on the **Connections** page; the owner or an admin can change or delete them.
 
+- **Granola (personal account)**: for a Granola account without a Business plan. Add it and click **Sign in to Granola**: ktx shows a code and a link to Granola's sign-in page; approve there and the connection is created (no password or key goes through ktx). It then reads your notes the way the Granola desktop app does, every 15 minutes: the summary, your own notes and the transcript (microphone = you, system audio = "Them"), with the calendar event's iCal UID as `calendar_event_id` so linking is exact. A note without a summary that changed in the last two hours is left for a later run (probably still recording).
+  - **Unofficial:** it uses Granola's internal API and identifies as the desktop app (`Granola/<version> (macOS; ktx)`); it may break when Granola changes its app. If syncs fail with "Unsupported client", set *Granola app version* to a current desktop version.
+  - **Session:** Granola's refresh tokens are single use; each refresh is saved (sealed) before the new access token is used, and saving the connection's form never overwrites it. If the session is lost (revoked, or a token spent elsewhere), syncs fail with "sign in again": use **Sign in again** on the connection (only its owner can).
+  - Ids: `source: granola` with Granola's document UUID, so they don't collide with Business-API notes (`not_…`). A call both you and Maxim recorded is stored twice, once per recording.
 - **Granola** (Business plan API key) → `transcripts/<type>/<date>-<time>-<title>-<id>.md`. The type is the connection's "Type for new notes" setting (default `meetings`). It only applies to new notes: re-sort one in the UI and later syncs of it stay where you put it.
   - **Front matter:** title, date (calendar time, in the connection's time zone), participants, `source: granola`, `source_id` (the note ID), `granola_url`, `calendar_event_id`, folders.
   - **Body:** summary, the owner's own notes, transcript.

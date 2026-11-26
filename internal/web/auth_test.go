@@ -121,6 +121,48 @@ func newIDP(t *testing.T, clientID string) *fakeIDP {
 	return idp
 }
 
+// deviceStub connects by signing in; approve it with deviceStub.approve.
+var deviceStub = &deviceConn{}
+
+type deviceConn struct {
+	mu       sync.Mutex
+	approved bool
+	syncs    []map[string]string // secrets each sync saw
+}
+
+func (d *deviceConn) approve() { d.mu.Lock(); d.approved = true; d.mu.Unlock() }
+func (*deviceConn) Kind() string            { return "device" }
+func (*deviceConn) Title() string           { return "Device" }
+func (*deviceConn) Description() string     { return "Signs in." }
+func (*deviceConn) Interval() time.Duration { return time.Hour }
+func (*deviceConn) Fields() []connectors.Field {
+	return []connectors.Field{{Name: "type", Label: "Type"}}
+}
+func (*deviceConn) Check(_ context.Context, c connectors.Config) (string, error) {
+	if c.Settings["type"] == "bad" {
+		return "", errors.New("bad type")
+	}
+	return "ok", nil
+}
+func (d *deviceConn) Sync(_ context.Context, c connectors.Config, cursor string, _ func(store.Item) error) (string, error) {
+	d.mu.Lock()
+	d.syncs = append(d.syncs, c.Secrets)
+	d.mu.Unlock()
+	// Rotate, as Granola does.
+	return cursor, c.SaveSecrets(map[string]string{"refresh": c.Secrets["refresh"] + "+"})
+}
+func (*deviceConn) StartSignIn(context.Context) (connectors.Prompt, error) {
+	return connectors.Prompt{URL: "https://auth.example/device?code=WXYZ", Code: "WXYZ", Expires: time.Now().Add(5 * time.Minute), Interval: time.Millisecond, State: "dc"}, nil
+}
+func (d *deviceConn) PollSignIn(context.Context, connectors.Prompt) (map[string]string, string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.approved {
+		return nil, "", connectors.ErrPending
+	}
+	return map[string]string{"refresh": "r0"}, "antonio@melzi.dev", nil
+}
+
 // stub connector for the connections pages.
 type stub struct{}
 
@@ -180,7 +222,7 @@ func setupAuth(t *testing.T) *authEnv {
 	st.SetLinker(calendar.Linker{})
 	cal := calendar.NewService(repo, st.Relink)
 	box, _ := secrets.New(make([]byte, 32))
-	mgr := connectors.NewManager(db, box, st, quiet, stub{})
+	mgr := connectors.NewManager(db, box, st, quiet, stub{}, deviceStub)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := mgr.Start(ctx); err != nil {

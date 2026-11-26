@@ -41,6 +41,10 @@ type Config struct {
 	Secrets  map[string]string
 	Settings map[string]string
 	Owner    Person // whose connection it is (empty in Check)
+	// SaveSecrets stores new secrets at once (sealed), during a sync: for
+	// rotating credentials such as single-use refresh tokens, which must be
+	// saved before they're used. Nil outside a sync.
+	SaveSecrets func(map[string]string) error
 }
 
 // Person is someone ktx knows, e.g. a connection's owner.
@@ -76,6 +80,7 @@ type Manager struct {
 	mu      sync.Mutex
 	ctx     context.Context
 	workers map[int64]*worker
+	signIns map[string]*PendingSignIn // device sign-ins waiting for approval
 }
 
 type worker struct {
@@ -233,6 +238,14 @@ func (m *Manager) RunOnce(ctx context.Context, id int64, kind Connector, trigger
 		run.Error = err.Error()
 		return run
 	}
+	cfg.SaveSecrets = func(sec map[string]string) error {
+		plain, _ := json.Marshal(sec)
+		if err := m.db.SetConnectionSecrets(conn.ID, m.box.Seal(sealContext(conn.ID), plain)); err != nil {
+			return err
+		}
+		cfg.Secrets = sec
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
@@ -323,6 +336,9 @@ func (m *Manager) Create(ctx context.Context, owner state.User, kind, label stri
 	if m.box == nil {
 		return 0, secrets.ErrNoKey
 	}
+	if _, ok := k.(SignIn); ok {
+		return 0, &FormError{[]string{k.Title() + " connects by signing in, not with a key"}}
+	}
 	cfg, problems := split(k, values, nil)
 	if strings.TrimSpace(label) == "" {
 		problems = append(problems, "Name is required")
@@ -373,6 +389,20 @@ func (m *Manager) Update(ctx context.Context, id int64, label string, enabled bo
 	}
 	if len(problems) > 0 {
 		return &FormError{problems}
+	}
+	if _, signIn := k.(SignIn); signIn {
+		// The session is the sign-in's; a form never changes it. Leaving
+		// Secrets nil keeps the stored (possibly just rotated) one.
+		if !sameMap(cfg.Settings, old.Settings) {
+			if _, err := k.Check(ctx, Config{Settings: cfg.Settings}); err != nil {
+				return &FormError{[]string{err.Error()}}
+			}
+		}
+		conn.Label, conn.Enabled, conn.Settings, conn.Secrets = strings.TrimSpace(label), enabled, cfg.Settings, nil
+		if err := m.db.UpdateConnection(conn); err != nil {
+			return err
+		}
+		return m.Reconcile()
 	}
 	if !sameMap(cfg.Secrets, old.Secrets) || !sameMap(cfg.Settings, old.Settings) {
 		account, err := k.Check(ctx, cfg)

@@ -2,6 +2,8 @@ package web
 
 import "github.com/acheong08/ktx/internal/state"
 
+import "github.com/acheong08/ktx/internal/calendar"
+
 import "strconv"
 
 templ connectionsPage(v connectionsView) {
@@ -84,6 +86,7 @@ templ connectionFormPage(v connFormView) {
 			<h1>{ v.Conn.Label }</h1>
 		}
 		<p class="lead">{ v.Kind.Description() }</p>
+		@flashBox(v.Flash)
 		if len(v.Problems) > 0 {
 			<div class="flash error" role="alert">
 				<ul>
@@ -150,13 +153,21 @@ templ connectionFormPage(v connFormView) {
 					<label class="check"><input type="checkbox" name="enabled" checked?={ v.Enabled }/> Enabled (syncs every { v.Kind.Interval().String() })</label>
 				}
 				<button type="submit" class="primary">
-					if v.Conn == nil {
+					if v.Conn == nil && v.SignIn {
+						Sign in to { v.Kind.Title() }
+					} else if v.Conn == nil {
 						Check and add
 					} else {
 						Save
 					}
 				</button>
 			</form>
+			if v.Conn != nil && v.SignIn {
+				<form method="post" action={ templ.URL("/settings/connections/" + strconv.FormatInt(v.Conn.ID, 10) + "/signin") } class="settings">
+					<p class="help">If syncs fail with “sign in again”, or to switch accounts:</p>
+					<button type="submit">Sign in again</button>
+				</form>
+			}
 		}
 		if v.Conn != nil {
 			<h2>Recent syncs</h2>
@@ -322,4 +333,31 @@ templ generalPage(v generalView) {
 			<button type="submit" class="primary">Save</button>
 		</form>
 	}
+}
+
+templ signInPage(v signInView) {
+	@layout("Sign in to "+v.Title, v.Chrome) {
+		<section class="narrow">
+			<p class="back"><a href="/settings/connections">← Connections</a></p>
+			<h1>Sign in to { v.Title }</h1>
+			<ol class="steps">
+				<li>
+					<a class="button primary" href={ templ.SafeURL(v.Pending.Prompt.URL) } target="_blank" rel="noopener noreferrer">Open the sign-in page</a>
+				</li>
+				<li>Check it shows this code, then approve: <code class="code">{ v.Pending.Prompt.Code }</code></li>
+				<li>Come back here; this page continues by itself.</li>
+			</ol>
+			@signInWaiting(v.Pending.ID)
+			<p class="help">The code is valid until { v.Pending.Prompt.Expires.In(calendar.DefaultZone()).Format("15:04") }. ktx keeps the session encrypted; it never sees your password.</p>
+		</section>
+	}
+}
+
+templ signInWaiting(id string) {
+	<p class="pending" hx-get={ "/settings/connections/signin/" + id + "/status" } hx-trigger="every 3s" hx-swap="outerHTML">Waiting for approval…</p>
+}
+
+templ signInStatus(msg string) {
+	@flashBox(flash{"error", msg + " "})
+	<p><a class="button" href="/settings/connections">Back to Connections</a></p>
 }

@@ -199,6 +199,9 @@ func (u *UI) Handler() http.Handler {
 		mux.HandleFunc("POST /settings/connections/{id}", u.page(u.updateConnection))
 		mux.HandleFunc("POST /settings/connections/{id}/sync", u.page(u.syncConnection))
 		mux.HandleFunc("POST /settings/connections/{id}/delete", u.page(u.deleteConnection))
+		mux.HandleFunc("POST /settings/connections/{id}/signin", u.page(u.reauthConnection))
+		mux.HandleFunc("GET /settings/connections/signin/{sid}", u.page(u.signInPage))
+		mux.HandleFunc("GET /settings/connections/signin/{sid}/status", u.page(u.signInStatus))
 	}
 
 	// Settings: /settings opens the first section; the old top-level

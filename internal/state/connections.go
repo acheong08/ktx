@@ -62,11 +62,29 @@ func (s *DB) CreateConnection(c Connection) (int64, error) {
 
 // UpdateConnection saves label, settings, credential, account and enabled.
 // It leaves the cursor alone (see SetCursor).
+// A nil c.Secrets keeps the stored secrets (a sync may have rotated them
+// meanwhile, e.g. a single-use refresh token).
 func (s *DB) UpdateConnection(c Connection) error {
 	settings, _ := json.Marshal(nonNil(c.Settings))
-	res, err := s.db.Exec(`UPDATE connections SET label = ?, settings = ?, secrets = ?, secret_hint = ?,
+	var sealed any // NULL: keep
+	if c.Secrets != nil {
+		sealed = c.Secrets
+	}
+	res, err := s.db.Exec(`UPDATE connections SET label = ?, settings = ?, secrets = COALESCE(?, secrets), secret_hint = ?,
 		account = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		c.Label, string(settings), c.Secrets, c.SecretHint, c.Account, c.Enabled, s.stamp(), c.ID)
+		c.Label, string(settings), sealed, c.SecretHint, c.Account, c.Enabled, s.stamp(), c.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetConnectionSecrets replaces only a connection's sealed secrets.
+func (s *DB) SetConnectionSecrets(id int64, sealed []byte) error {
+	res, err := s.db.Exec(`UPDATE connections SET secrets = ? WHERE id = ?`, sealed, id)
 	if err != nil {
 		return err
 	}

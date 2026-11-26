@@ -20,6 +20,7 @@ import (
 	"github.com/acheong08/ktx/internal/config"
 	"github.com/acheong08/ktx/internal/connectors"
 	"github.com/acheong08/ktx/internal/connectors/granola"
+	"github.com/acheong08/ktx/internal/connectors/granolaacct"
 	"github.com/acheong08/ktx/internal/connectors/pocket"
 	"github.com/acheong08/ktx/internal/dav"
 	"github.com/acheong08/ktx/internal/feeds"
@@ -120,7 +121,7 @@ func run(log *slog.Logger) error {
 	} else {
 		log.Warn("no master key configured; connectors are disabled (set BRAIN_MASTER_KEY_FILE or the systemd credential " + secrets.CredentialName + ")")
 	}
-	conns := connectors.NewManager(db, box, st, log, granola.New(), pocket.New())
+	conns := connectors.NewManager(db, box, st, log, granola.New(), granolaacct.New(), pocket.New())
 	if err := conns.Start(ctx); err != nil {
 		return err
 	}

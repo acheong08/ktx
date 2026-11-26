@@ -90,6 +90,13 @@ type connFormView struct {
 	Runs     []state.Run
 	CanEdit  bool
 	Syncing  bool
+	SignIn   bool // connects by signing in to the service
+	Flash    flash
+}
+
+func isSignIn(k connectors.Connector) bool {
+	_, ok := k.(connectors.SignIn)
+	return ok
 }
 
 func (u *UI) newConnection(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +108,7 @@ func (u *UI) newConnection(w http.ResponseWriter, r *http.Request) {
 	user, _ := currentUser(r)
 	u.render(w, r, http.StatusOK, connectionFormPage(connFormView{
 		Chrome: u.chrome(r, "connections"), Kind: kind, Label: possessive(user.Display()) + " " + kind.Title(),
-		Values: map[string]string{}, Enabled: true, CanEdit: true,
+		Values: map[string]string{}, Enabled: true, CanEdit: true, SignIn: isSignIn(kind),
 	}))
 }
 
@@ -114,6 +121,18 @@ func (u *UI) createConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	values := formValues(r, kind)
 	label := r.PostFormValue("label")
+	if isSignIn(kind) {
+		ps, err := u.conns.StartSignIn(r.Context(), user, kind.Kind(), label, values, 0)
+		if err != nil {
+			u.render(w, r, http.StatusUnprocessableEntity, connectionFormPage(connFormView{
+				Chrome: u.chrome(r, "connections"), Kind: kind, Label: label, Values: publicValues(kind, values),
+				Enabled: true, Problems: problems(err), CanEdit: true, SignIn: true,
+			}))
+			return
+		}
+		http.Redirect(w, r, "/settings/connections/signin/"+ps.ID, http.StatusSeeOther)
+		return
+	}
 	id, err := u.conns.Create(r.Context(), user, kind.Kind(), label, values)
 	if err != nil {
 		u.log.Warn("adding connection failed", "kind", kind.Kind(), "user", user.Display(), "err", err)
@@ -164,6 +183,7 @@ func (u *UI) renderConnection(w http.ResponseWriter, r *http.Request, status int
 	u.render(w, r, status, connectionFormPage(connFormView{
 		Chrome: u.chrome(r, "connections"), Kind: kind, Conn: &c, Label: label, Values: values,
 		Enabled: enabled, Problems: probs, Runs: runs, CanEdit: canEdit(user, c), Syncing: u.conns.Syncing(c.ID),
+		SignIn: isSignIn(kind), Flash: connFlash(r),
 	}))
 }
 
@@ -409,4 +429,77 @@ func secretPlaceholder(v connFormView, placeholder string) string {
 		return "stored (" + v.Conn.SecretHint + "); leave empty to keep it"
 	}
 	return placeholder
+}
+
+func connFlash(r *http.Request) flash {
+	if r.URL.Query().Get("done") == "signedin" {
+		return flash{"ok", "Signed in. A sync has started."}
+	}
+	return flash{}
+}
+
+// --- signing in to a service (device flow) -------------------------------------------
+
+type signInView struct {
+	Chrome  chrome
+	Pending connectors.PendingSignIn
+	Title   string
+	Error   string
+}
+
+// reauthConnection signs an existing connection in again.
+func (u *UI) reauthConnection(w http.ResponseWriter, r *http.Request) {
+	c, kind, ok := u.loadConnection(w, r)
+	if !ok {
+		return
+	}
+	user, _ := currentUser(r)
+	if user.ID != c.OwnerID { // the session is the owner's own account
+		u.forbidden(w, r)
+		return
+	}
+	ps, err := u.conns.StartSignIn(r.Context(), user, kind.Kind(), c.Label, nil, c.ID)
+	if err != nil {
+		u.renderConnection(w, r, http.StatusUnprocessableEntity, c, kind, problems(err), c.Label, c.Settings, c.Enabled)
+		return
+	}
+	http.Redirect(w, r, "/settings/connections/signin/"+ps.ID, http.StatusSeeOther)
+}
+
+func (u *UI) signInPage(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	ps, ok := u.conns.PendingSignInFor(r.PathValue("sid"), user.ID)
+	if !ok {
+		u.render(w, r, http.StatusNotFound, errorPage(u.chrome(r, "connections"), "This sign-in isn't known any more (it finished, expired, or ktx restarted). Start again from Connections."))
+		return
+	}
+	v := signInView{Chrome: u.chrome(r, "connections"), Pending: ps, Title: ps.Kind}
+	if k, ok := u.conns.Kind(ps.Kind); ok {
+		v.Title = k.Title()
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	u.render(w, r, http.StatusOK, signInPage(v))
+}
+
+// signInStatus polls the sign-in once; htmx calls it every few seconds.
+func (u *UI) signInStatus(w http.ResponseWriter, r *http.Request) {
+	user, _ := currentUser(r)
+	w.Header().Set("Cache-Control", "no-store")
+	id, done, err := u.conns.PollSignIn(r.Context(), r.PathValue("sid"), user.ID)
+	switch {
+	case err != nil:
+		u.log.Warn("connection sign-in failed", "user", user.Display(), "err", err)
+		u.render(w, r, http.StatusOK, signInStatus(err.Error()))
+	case done:
+		u.log.Info("connection signed in", "id", id, "user", user.Display())
+		to := "/settings/connections/" + strconv.FormatInt(id, 10) + "?done=signedin"
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("HX-Redirect", to)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Redirect(w, r, to, http.StatusSeeOther)
+	default:
+		u.render(w, r, http.StatusOK, signInWaiting(r.PathValue("sid")))
+	}
 }

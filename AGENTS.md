@@ -19,7 +19,7 @@ notes/labels.yaml                                     note labels: name + descri
 Ways in:
 - **API:** `POST /v1/transcripts` (Bearer API token). There is no other upload endpoint; meetings are transcripts of a type.
 - **Web UI** (htmx 4 + templ), sign-in through Pocket ID (OIDC). Pages: Transcripts (list, search, bulk type edit, detail, edit, new, delete), Notes, Calendar (`/agenda`, week agenda; `/calendar` is an old cached 301 to Settings, don't reuse it), Tasks (`/tasks`), and Settings → General / Connections / Calendar / Tokens / Labels / AI.
-- **Connectors** (inside the service, per-user credentials): Granola (REST API, Business key) and Pocket. Each has a "Type for …" setting for where *new* documents go; documents already stored stay where they are.
+- **Connectors** (inside the service, per-user credentials): Granola (REST API, Business key), Granola personal account (`granolaacct`: device sign-in + the desktop app's internal API, unofficial; single-use refresh tokens saved via `Config.SaveSecrets` before use) and Pocket. Sign-in connectors implement `connectors.SignIn` (StartSignIn/PollSignIn; pending sign-ins live in the Manager's memory); `UpdateConnection` with nil Secrets keeps the stored ones. Each has a "Type for …" setting for where *new* documents go; documents already stored stay where they are.
 - **Notes** (web UI scratchpad): saved to `pending_notes` in SQLite, then a worker titles them and adds fitting labels (Neuralwatt via fantasy, workspace key set by admins in Settings → AI; one call returns `Title:`/`Labels:` lines; fallback first line, author's labels only) and commits. Edits/deletes are synchronous. Labels in use can't be deleted.
 - **CalDAV** at `/dav/` (Apple Calendar, Thunderbird), Basic auth with a calendar-scoped token.
 - **MCP** at `/mcp` (read tools over transcripts, notes and calendars, plus `create_note`, which always adds the `slop` label (defined automatically if missing) and records `via: MCP: <app>`; every call needs an `intent`, logged as `mcp call`). ktx is its own OAuth server (DCR, PKCE, rotating refresh tokens); consent at `/oauth/authorize` uses the normal Pocket ID sign-in. Only when OIDC is configured.
@@ -47,7 +47,7 @@ internal/calendar        git-backed calendars, .ics import (upsert, never delete
 internal/dav             CalDAV on go-webdav; adds MKCALENDAR, PROPPATCH (name/colour), getctag + supported-report-set rewriting of PROPFIND
 internal/state           SQLite with PRAGMA user_version migrations: users, sessions, api_tokens(scope api|caldav), oauth_clients, oauth_grants, settings, pending_notes, subscriptions, connections, runs
 internal/secrets         AES-256-GCM sealing, master key from systemd credential ktx-master-key
-internal/connectors      Manager (workers, runs, sealing) + granola/ + pocket/
+internal/connectors      Manager (workers, runs, sealing, signin.go device flows) + granola/ + granolaacct/ + pocket/
 internal/server          POST /v1/transcripts, GET /healthz
 internal/ai              Settings (sealed Neuralwatt key + model in `settings`), Title() via charm.land/fantasy openaicompat (reasoning_effort none), CleanTitle/FallbackTitle
 internal/notes           notes/ in git + pending queue worker (SubmitNote/List/Get/Edit(Changes)/Delete); labels.go (labels.yaml); graph.go (goal/decision fields, refs, Outline)
